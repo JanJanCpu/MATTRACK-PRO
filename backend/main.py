@@ -102,7 +102,9 @@ def get_procurement_advice(site_id: int, item_name: str, db: Session = Depends(g
     if not site:
         raise HTTPException(status_code=404, detail="Site not found")
 
-    suppliers = db.query(models.Supplier).all()
+    suppliers = db.query(models.Supplier).filter(
+        models.Supplier.categories.ilike(f"%{item_name}%")
+    ).all()
     recommendations = []
     for s in suppliers:
         dist = get_distance(site.latitude, site.longitude, s.latitude, s.longitude)

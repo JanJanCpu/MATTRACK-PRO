@@ -5,7 +5,8 @@ from database import Base
 
 class ProjectSite(Base):
     # Fix: Must have double underscores on both sides
-    __tablename__ = "project_sites" 
+    __tablename__ = "project_sites"
+    __table_args__ = {'extend_existing': True} 
     
     id = Column(Integer, primary_key=True, index=True)
     site_name = Column(String, unique=True, index=True)
@@ -40,9 +41,22 @@ class Supplier(Base):
 
 class MaterialRequest(Base):
     __tablename__ = "material_requests"
+    __table_args__ = {'extend_existing': True}
 
     id = Column(Integer, primary_key=True, index=True)
     item_name = Column(String)
     quantity_needed = Column(Integer)
     site_id = Column(Integer, ForeignKey("project_sites.id"))
     status = Column(String, default="Pending") # Pending, Fulfilled, In-Transit
+
+class Supplier(Base):
+    __tablename__ = "suppliers"
+    __table_args__ = {'extend_existing': True}
+    
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, index=True)
+    contact = Column(String)
+    latitude = Column(Float)      # Keep this
+    longitude = Column(Float)     # Keep this
+    quality_rating = Column(Float, default=5.0) # Keep this
+    categories = Column(String, nullable=True)  # Keep this
