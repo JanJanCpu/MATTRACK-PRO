@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, ForeignKey
+from sqlalchemy import Column, Integer, String, Float, Boolean, ForeignKey
 from sqlalchemy.orm import relationship 
 from database import Base
 
@@ -37,6 +37,25 @@ class Supplier(Base):
     longitude = Column(Float)
     quality_rating = Column(Float, default=5.0)
     categories = Column(String, nullable=True)
+    is_sister_company = Column(Boolean, default=False) # Added for Logic
+
+    # 1-to-Many Relationship to Materials
+    materials = relationship("SupplierMaterial", back_populates="supplier", cascade="all, delete-orphan")
+
+# --- NEW: Relational Sub-Table for Inventory ---
+class SupplierMaterial(Base):
+    __tablename__ = "supplier_materials"
+    __table_args__ = {'extend_existing': True}
+
+    id = Column(Integer, primary_key=True, index=True)
+    supplier_id = Column(Integer, ForeignKey("suppliers.id", ondelete="CASCADE"))
+    
+    material_name = Column(String, index=True)
+    price = Column(Float)
+    stock_level = Column(String) 
+
+    # Link back to parent
+    supplier = relationship("Supplier", back_populates="materials")
 
 class MaterialRequest(Base):
     __tablename__ = "material_requests"
