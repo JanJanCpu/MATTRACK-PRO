@@ -10,6 +10,7 @@ import {
   ArrowRight,
   Loader,
   Search,
+  Clock,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { advisoryAPI, sitesAPI, inventoryAPI } from "../../services/apiService";
@@ -141,6 +142,11 @@ export function Advisory() {
                   <div className="mt-2 text-xs flex gap-4 text-neutral-600">
                     <span className="flex items-center gap-1">
                       <Truck className="w-3 h-3" /> {res.distance_km}km
+                    </span>
+                    {/* Add this line below */}
+                    <span className="flex items-center gap-1">
+                      <Clock className="w-3 h-3" /> {res.travel_time_mins} mins
+                      (via OSRM)
                     </span>
                     <span className="flex items-center gap-1 font-bold text-emerald-600">
                       <Zap className="w-3 h-3" /> Predicted Best Value
