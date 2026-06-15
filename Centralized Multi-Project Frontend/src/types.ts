@@ -13,6 +13,8 @@ export interface Inventory {
   unit: string;
   status: string;
   site_id: number;
+  brand: string;      // <-- ADDED FOR LEDGER
+  fsn_status: string; // <-- ADDED FOR LEDGER
 }
 
 export interface Supplier {
@@ -60,4 +62,3 @@ export interface Dashboard {
   pendingDeliveries: number;
   surplusItems: number;
 }
-

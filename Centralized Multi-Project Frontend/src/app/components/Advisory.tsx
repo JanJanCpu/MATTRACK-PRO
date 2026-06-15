@@ -1,168 +1,214 @@
-import {
-  BrainCircuit,
-  Cpu,
-  Truck,
-  Share2,
-  Award,
-  Zap,
-  Star,
-  ShieldCheck,
-  ArrowRight,
-  Loader,
-  Search,
-  Clock,
-} from "lucide-react";
-import { useState, useEffect } from "react";
-import { advisoryAPI, sitesAPI, inventoryAPI } from "../../services/apiService";
-import type { ProjectSite, Inventory } from "../../types";
+import React, { useState, useEffect, useRef } from "react";
+import { AlertTriangle, CheckCircle, Send, Bot, User, Sparkles } from "lucide-react";
+import { inventoryAPI, advisoryAPI, sitesAPI } from "../../services/apiService";
+import type { Inventory } from "../../types";
+
+interface ChatMessage {
+  id: string;
+  role: "user" | "ai";
+  content: string;
+}
 
 export function Advisory() {
-  const [sites, setSites] = useState<ProjectSite[]>([]);
-  const [inventory, setInventory] = useState<Inventory[]>([]);
+  const [criticalItems, setCriticalItems] = useState<(Inventory & { siteName: string })[]>([]);
   const [loading, setLoading] = useState(false);
+  
+  // Chat State
+  const [messages, setMessages] = useState<ChatMessage[]>([
+    {
+      id: "welcome",
+      role: "ai",
+      content: "Hello! I am your MatTrack PRO Procurement Advisor. Click on an urgent item on the left, or ask me directly about our crowdsourced supplier options, pricing, or logistics.",
+    }
+  ]);
+  const [inputMessage, setInputMessage] = useState("");
+  const [isTyping, setIsTyping] = useState(false);
+  const chatEndRef = useRef<HTMLDivElement>(null);
 
-  // Selection States
-  const [selectedSite, setSelectedSite] = useState<string>("");
-  const [searchItem, setSearchItem] = useState("");
-  const [aiResults, setAiResults] = useState<any[]>([]);
+  // Auto-scroll chat to bottom
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, isTyping]);
 
   useEffect(() => {
-    sitesAPI.list().then(setSites);
-    inventoryAPI.list().then(setInventory);
+    const fetchCriticalStock = async () => {
+      setLoading(true);
+      try {
+        const [inventory, sites] = await Promise.all([
+          inventoryAPI.list(),
+          sitesAPI.list()
+        ]);
+        const siteMap = new Map(sites.map(s => [s.id, s.site_name]));
+        
+        const urgent = inventory
+          .filter(item => item.status === "Critical" || item.status === "Warning")
+          .map(item => ({
+            ...item,
+            siteName: siteMap.get(item.site_id) || `Site ${item.site_id}`
+          }));
+        setCriticalItems(urgent);
+      } catch (error) {
+        console.error("Failed to fetch critical stock");
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchCriticalStock();
   }, []);
 
-  const runAnalysis = async () => {
-    if (!selectedSite || !searchItem)
-      return alert("Please select a site and item.");
-    setLoading(true);
+  const handleSendMessage = async (e?: React.FormEvent, overrideMessage?: string) => {
+    e?.preventDefault();
+    const textToSend = overrideMessage || inputMessage;
+    if (!textToSend.trim()) return;
+
+    // 1. Add User Message to UI
+    const newUserMsg: ChatMessage = { id: Date.now().toString(), role: "user", content: textToSend };
+    setMessages(prev => [...prev, newUserMsg]);
+    setInputMessage("");
+    setIsTyping(true);
+
     try {
-      // Calls the real Neural Network logic from your FastAPI backend
-      const results = await advisoryAPI.procure(
-        Number(selectedSite),
-        searchItem,
-      );
-      setAiResults(results);
-    } catch (err) {
-      alert("AI Engine Error. Check if backend is running.");
+      // 2. Send to Backend API
+      const response = await advisoryAPI.askAI(textToSend);
+      
+      // 3. Add AI Response to UI
+      setMessages(prev => [...prev, {
+        id: (Date.now() + 1).toString(),
+        role: "ai",
+        content: response.reply || "I encountered an error analyzing that request. Please try again."
+      }]);
+    } catch (error) {
+      setMessages(prev => [...prev, {
+        id: (Date.now() + 1).toString(),
+        role: "ai",
+        content: "System Error: Unable to reach the AI API. Please verify your backend API keys are configured correctly."
+      }]);
     } finally {
-      setLoading(false);
+      setIsTyping(false);
     }
   };
 
+  // When clicking an item on the left, auto-generate a prompt for the AI
+  const handleAskAboutItem = (item: Inventory & { siteName: string }) => {
+    const prompt = `I have a ${item.status} shortage of ${item.quantity} ${item.unit} of ${item.item_name} at ${item.siteName}. Based on our unlisted suppliers, who offers the best price and fastest delivery?`;
+    handleSendMessage(undefined, prompt);
+  };
+
   return (
-    <div className="space-y-8 animate-in fade-in duration-500">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-neutral-900">
-            Smart Advisory Engine
-          </h1>
-          <p className="text-sm text-neutral-500 mt-1">
-            Multi-Criteria Procurement Optimization (SOP 1).
-          </p>
-        </div>
-        <div className="flex items-center gap-2 bg-emerald-50 text-emerald-700 px-4 py-2 rounded-lg border border-emerald-200">
-          <BrainCircuit className="w-5 h-5" />
-          <span className="text-sm font-semibold">Neural Net: Active</span>
-        </div>
+    <div className="space-y-6 animate-in fade-in duration-500 h-[calc(100vh-8rem)] flex flex-col">
+      <div>
+        <h1 className="text-2xl font-bold text-neutral-900 flex items-center gap-2">
+          <Sparkles className="w-6 h-6 text-emerald-500" />
+          AI Advisory Engine
+        </h1>
+        <p className="text-sm text-neutral-500 mt-1">
+          Interactive chatbot powered by live inventory data and crowdsourced supplier tracking.
+        </p>
       </div>
 
-      {/* Analysis Control Panel */}
-      <div className="bg-slate-900 p-6 rounded-xl text-white shadow-lg grid grid-cols-1 md:grid-cols-3 gap-6 items-end">
-        <div>
-          <label className="block text-xs font-bold text-slate-400 uppercase mb-2">
-            Target Project Site
-          </label>
-          <select
-            className="w-full bg-slate-800 border-slate-700 p-2 rounded-lg text-sm"
-            onChange={(e) => setSelectedSite(e.target.value)}
-          >
-            <option value="">Select project...</option>
-            {sites.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.site_name}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className="block text-xs font-bold text-slate-400 uppercase mb-2">
-            Required Material
-          </label>
-          <input
-            className="w-full bg-slate-800 border-slate-700 p-2 rounded-lg text-sm"
-            placeholder="e.g. Cement"
-            onChange={(e) => setSearchItem(e.target.value)}
-          />
-        </div>
-        <button
-          onClick={runAnalysis}
-          className="bg-emerald-500 hover:bg-emerald-600 py-2 rounded-lg font-bold flex items-center justify-center gap-2 transition-all"
-        >
-          {loading ? (
-            <Loader className="animate-spin" />
-          ) : (
-            <>
-              <Cpu className="w-4 h-4" /> Run Neural Analysis
-            </>
-          )}
-        </button>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Supplier Ranking (Real AI Scores) */}
-        <div className="bg-white border rounded-xl overflow-hidden shadow-sm">
-          <div className="p-5 border-b bg-indigo-50 text-indigo-900 font-bold flex items-center gap-2">
-            <Award className="w-5 h-5" /> AI Sourcing Recommendations
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 flex-1 min-h-0">
+        {/* LEFT COLUMN: Critical Shortages */}
+        <div className="lg:col-span-1 flex flex-col bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+          <div className="p-4 border-b border-slate-200 bg-slate-50 flex items-center gap-2">
+            <AlertTriangle className="w-5 h-5 text-amber-500" /> 
+            <h2 className="font-bold text-slate-800">Action Required</h2>
           </div>
-          <div className="p-5 space-y-4">
-            {aiResults.length > 0 ? (
-              aiResults.map((res, idx) => (
-                <div
-                  key={idx}
-                  className={`p-4 border rounded-xl ${idx === 0 ? "bg-indigo-50 border-indigo-200" : ""}`}
-                >
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <h3 className="font-bold text-neutral-900">
-                        {res.supplier}
-                      </h3>
-                      <p className="text-xs text-neutral-500">
-                        Contact: {res.contact}
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-2xl font-black text-indigo-600">
-                        {res.score}
-                      </div>
-                      <div className="text-[10px] uppercase text-neutral-400">
-                        Match Score
-                      </div>
-                    </div>
-                  </div>
-                  <div className="mt-2 text-xs flex gap-4 text-neutral-600">
-                    <span className="flex items-center gap-1">
-                      <Truck className="w-3 h-3" /> {res.distance_km}km
-                    </span>
-                    {/* Add this line below */}
-                    <span className="flex items-center gap-1">
-                      <Clock className="w-3 h-3" /> {res.travel_time_mins} mins
-                      (via OSRM)
-                    </span>
-                    <span className="flex items-center gap-1 font-bold text-emerald-600">
-                      <Zap className="w-3 h-3" /> Predicted Best Value
-                    </span>
-                  </div>
-                </div>
-              ))
+          
+          <div className="p-4 overflow-y-auto flex-1">
+            {loading ? (
+              <div className="text-sm text-slate-500 text-center py-8">Scanning ledger...</div>
+            ) : criticalItems.length === 0 ? (
+              <div className="flex flex-col items-center justify-center text-center h-full space-y-2 opacity-70">
+                <CheckCircle className="w-8 h-8 text-emerald-500" />
+                <p className="text-sm font-medium text-emerald-800">All sites are healthy.</p>
+              </div>
             ) : (
-              <p className="text-center py-10 text-neutral-400">
-                Run analysis to see AI rankings.
-              </p>
+              <div className="space-y-3">
+                {criticalItems.map(item => (
+                  <div key={item.id} className="p-4 border border-slate-200 rounded-xl hover:border-emerald-300 transition-colors bg-white">
+                    <div className="flex justify-between items-start mb-2">
+                      <div>
+                        <h3 className="font-bold text-slate-900">{item.item_name}</h3>
+                        <p className="text-xs text-slate-500">{item.siteName}</p>
+                      </div>
+                      <span className={`text-xs font-bold px-2 py-1 rounded ${
+                        item.status === "Critical" ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-700"
+                      }`}>
+                        {item.status}
+                      </span>
+                    </div>
+                    <button 
+                      onClick={() => handleAskAboutItem(item)}
+                      className="w-full mt-3 py-2 bg-slate-100 text-slate-700 text-xs font-bold rounded-lg hover:bg-emerald-50 hover:text-emerald-700 border border-transparent hover:border-emerald-200 transition-all flex items-center justify-center gap-2"
+                    >
+                      <Sparkles className="w-3 h-3" /> Ask AI to source this
+                    </button>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         </div>
 
-        {/* Surplus logic remains (you can keep your existing surplus mapping) */}
+        {/* RIGHT COLUMN: The AI Chatbot Interface */}
+        <div className="lg:col-span-2 flex flex-col bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden relative">
+          
+          {/* Chat Messages Area */}
+          <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-slate-50/50">
+            {messages.map(msg => (
+              <div key={msg.id} className={`flex gap-4 ${msg.role === "user" ? "flex-row-reverse" : ""}`}>
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
+                  msg.role === "ai" ? "bg-emerald-100 text-emerald-600" : "bg-slate-800 text-white"
+                }`}>
+                  {msg.role === "ai" ? <Bot className="w-5 h-5" /> : <User className="w-5 h-5" />}
+                </div>
+                <div className={`max-w-[80%] rounded-2xl px-5 py-3 text-sm shadow-sm ${
+                  msg.role === "user" 
+                    ? "bg-slate-800 text-white rounded-tr-none" 
+                    : "bg-white border border-slate-200 text-slate-700 rounded-tl-none leading-relaxed"
+                }`}>
+                  {msg.content}
+                </div>
+              </div>
+            ))}
+            
+            {/* Typing Indicator */}
+            {isTyping && (
+              <div className="flex gap-4">
+                <div className="w-8 h-8 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0">
+                  <Bot className="w-5 h-5" />
+                </div>
+                <div className="bg-white border border-slate-200 rounded-2xl rounded-tl-none px-5 py-4 flex gap-1 items-center shadow-sm w-16">
+                  <div className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
+                  <div className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce [animation-delay:-0.15s]"></div>
+                  <div className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce"></div>
+                </div>
+              </div>
+            )}
+            <div ref={chatEndRef} />
+          </div>
+
+          {/* Chat Input Box */}
+          <div className="p-4 bg-white border-t border-slate-200">
+            <form onSubmit={handleSendMessage} className="flex gap-2">
+              <input
+                type="text"
+                value={inputMessage}
+                onChange={(e) => setInputMessage(e.target.value)}
+                placeholder="Ask about materials, suppliers, or logistics..."
+                className="flex-1 px-4 py-3 bg-slate-100 border-transparent focus:bg-white focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 rounded-xl outline-none transition-all"
+                disabled={isTyping}
+              />
+              <button
+                type="submit"
+                disabled={!inputMessage.trim() || isTyping}
+                className="px-4 py-3 bg-emerald-600 text-white rounded-xl hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center shrink-0 shadow-sm"
+              >
+                <Send className="w-5 h-5" />
+              </button>
+            </form>
+          </div>
+        </div>
       </div>
     </div>
   );

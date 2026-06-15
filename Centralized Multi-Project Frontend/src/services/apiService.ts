@@ -1,29 +1,41 @@
-import { API_ENDPOINTS } from "../config";
 import type {
   ProjectSite,
   Inventory,
   Supplier,
   MaterialRequest,
-  InventoryGrouped,
   ProcurementAdvice,
 } from "../types";
 
-// Error handling wrapper
-async function fetchAPI<T>(url: string, options?: RequestInit): Promise<T> {
+const API_BASE = "http://localhost:8000";
+
+// --- GLOBAL FETCH WRAPPER WITH JWT SECURITY ---
+async function fetchAPI<T>(endpoint: string, options?: RequestInit): Promise<T> {
+  const url = `${API_BASE}${endpoint}`;
+  
+  // 1. Get the secure token from local storage
+  const token = localStorage.getItem("token");
+  
+  // 2. Attach headers (including Auth if token exists)
+  // FIXED: Strictly typed as a string dictionary to satisfy TypeScript
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(options?.headers as Record<string, string>),
+  };
+
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
   try {
     const response = await fetch(url, {
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-      },
       ...options,
+      headers,
     });
 
     if (!response.ok) {
-      // This will help you debug 422 errors (validation errors)
       const errorDetail = await response.json().catch(() => ({}));
-      console.error("Backend Validation Error:", errorDetail);
-      throw new Error(`API Error: ${response.status} ${response.statusText}`);
+      console.error("Backend Error:", errorDetail);
+      throw new Error(errorDetail.detail || `API Error: ${response.status}`);
     }
 
     return await response.json();
@@ -33,83 +45,111 @@ async function fetchAPI<T>(url: string, options?: RequestInit): Promise<T> {
   }
 }
 
-// 1. Site APIs (Matches SiteCreate schema)
+// --- 0. AUTHENTICATION APIs ---
+export const authAPI = {
+  login: async (username: string, password: string) => {
+    // FastAPI requires form-data for login, not JSON!
+    const formData = new URLSearchParams();
+    formData.append("username", username);
+    formData.append("password", password);
+
+    const response = await fetch(`${API_BASE}/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: formData,
+    });
+    
+    if (!response.ok) throw new Error("Invalid username or password");
+    const data = await response.json();
+    
+    // Save token to localStorage for the fetchAPI wrapper to use
+    localStorage.setItem("token", data.access_token);
+    return data;
+  },
+
+  register: (userData: { username: string; email: string; password: string; role: string; company_name?: string }) => 
+    fetchAPI<any>("/register", {
+      method: "POST",
+      body: JSON.stringify(userData),
+    }),
+
+  logout: () => {
+    localStorage.removeItem("token");
+  }
+};
+
+// --- 1. SITE APIs ---
 export const sitesAPI = {
-  // siteData must match SiteCreate: { name, lat, lon }
+  list: () => fetchAPI<ProjectSite[]>("/sites/"),
   create: (siteData: { name: string; lat: number; lon: number }) =>
-    fetchAPI<ProjectSite>(API_ENDPOINTS.SITES_CREATE, {
+    fetchAPI<ProjectSite>("/sites/", {
       method: "POST",
       body: JSON.stringify(siteData),
     }),
-
-  list: () => fetchAPI<ProjectSite[]>(API_ENDPOINTS.SITES_LIST),
 };
 
-// 2. Inventory APIs (Matches InventoryCreate schema)
+// --- 2. INVENTORY & AUDIT APIs ---
 export const inventoryAPI = {
-  list: () => fetchAPI<Inventory[]>(API_ENDPOINTS.INVENTORY_LIST),
-
-  create: (itemData: {
+  list: () => fetchAPI<Inventory[]>("/inventory/"),
+  
+  // Replaced .create() with the new Audit Logging Endpoint
+  logTransaction: (itemData: {
     item_name: string;
+    brand: string;
     quantity: number;
     unit: string;
     status: string;
+    fsn_status: string;
     site_id: number;
   }) =>
-    fetchAPI<Inventory>(API_ENDPOINTS.INVENTORY_CREATE, {
+    fetchAPI<any>("/inventory/log", {
       method: "POST",
       body: JSON.stringify(itemData),
     }),
 
-  delete: (id: number) => {
-    // We strip any trailing slash from the base endpoint then add /ID
-    const baseUrl = API_ENDPOINTS.INVENTORY_CREATE.replace(/\/$/, "");
-    return fetchAPI<any>(`${baseUrl}/${id}`, {
-      method: "DELETE",
-    });
-  },
+  delete: (id: number) => 
+    fetchAPI<any>(`/inventory/${id}`, { method: "DELETE" }),
 
-  grouped: () => fetchAPI<any>(API_ENDPOINTS.INVENTORY_GROUPED),
+  getLogs: () => fetchAPI<any[]>("/inventory/audit-logs"),
+  
 };
 
-// 3. Supplier APIs (Matches SupplierCreate schema)
+// --- 3. SUPPLIER APIs (CROWDSOURCING) ---
 export const suppliersAPI = {
-  // supplierData should be: { name, contact, lat, lon, rating }
+  list: () => fetchAPI<Supplier[]>("/suppliers/"),
+  
+  // Includes the new optional crowdsourced data
   create: (supplierData: {
     name: string;
     contact: string;
     lat: number;
     lon: number;
     rating: number;
+    material?: string;
+    price?: string;
+    stockLevel?: string;
   }) =>
-    fetchAPI<Supplier>(API_ENDPOINTS.SUPPLIERS_CREATE, {
+    fetchAPI<Supplier>("/suppliers/", {
       method: "POST",
       body: JSON.stringify(supplierData),
     }),
-
-  list: () => fetchAPI<Supplier[]>(API_ENDPOINTS.SUPPLIERS_LIST),
 };
 
-// 4. Advisory APIs (The "Smart Engine")
+// --- 4. ADVISORY APIs ---
 export const advisoryAPI = {
+  // Your original deterministic engine
   procure: (site_id: number, item_name: string) =>
-    fetchAPI<ProcurementAdvice[]>(
-      API_ENDPOINTS.ADVISORY_PROCURE(site_id, item_name),
-    ),
-};
+    fetchAPI<ProcurementAdvice[]>(`/advisory/procure/${site_id}/${item_name}`),
 
-// 5. Material Request APIs
-export const requestsAPI = {
-  create: (item: Omit<MaterialRequest, "id">) =>
-    fetchAPI<MaterialRequest>(API_ENDPOINTS.REQUESTS_CREATE, {
+  // The NEW AI Chatbot engine
+  askAI: (message: string, context?: any) =>
+    fetchAPI<any>("/advisory/chat", {
       method: "POST",
-      body: JSON.stringify(item),
+      body: JSON.stringify({ message, context }),
     }),
-
-  list: () => fetchAPI<MaterialRequest[]>(API_ENDPOINTS.REQUESTS_LIST),
 };
 
-// 6. Health check
+// --- 5. SYSTEM APIs ---
 export const systemAPI = {
-  healthCheck: () => fetchAPI(API_ENDPOINTS.HEALTH_CHECK),
+  healthCheck: () => fetchAPI<any>("/"),
 };

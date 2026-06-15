@@ -10,7 +10,7 @@ import {
   Clock,
   Loader,
 } from "lucide-react";
-import { Link } from "react-router";
+import { Link } from "react-router-dom";
 import { useState, useEffect } from "react";
 import { sitesAPI, inventoryAPI } from "../../services/apiService";
 import type { ProjectSite, Inventory } from "../../types";

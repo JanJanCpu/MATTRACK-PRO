@@ -1,10 +1,44 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, EmailStr
 from typing import List, Optional
+from datetime import datetime
 
 # --- SHARED ---
 class MessageResponse(BaseModel):
     status: str
     message: str
+
+# --- AUTH & USERS (NEW) ---
+class UserBase(BaseModel):
+    username: str
+    email: EmailStr
+    role: str
+
+class UserCreate(UserBase):
+    password: str
+    company_name: Optional[str] = None
+    company_address: Optional[str] = None
+    company_contact: Optional[str] = None
+    company_website: Optional[str] = None
+
+class UserResponse(UserBase):
+    id: int
+    company_name: Optional[str] = None
+    
+    class Config:
+        from_attributes = True
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+
+class ActivityLogResponse(BaseModel):
+    id: int
+    user_id: int
+    action: str
+    timestamp: datetime
+
+    class Config:
+        from_attributes = True
 
 # --- SITE ---
 class SiteBase(BaseModel):
@@ -25,16 +59,19 @@ class SiteResponse(BaseModel):
     site_name: str
     latitude: float
     longitude: float
+    stage_status: Optional[str] = None # Added to match models.py
 
     class Config:
         from_attributes = True
 
-# --- INVENTORY ---
+# --- INVENTORY (UPDATED) ---
 class InventoryBase(BaseModel):
     item_name: str
+    brand: str = "Generic/No Brand"  # Added to match models.py
     quantity: float
     unit: str
     status: str
+    fsn_status: str = "FAST"         # Added to match models.py
     site_id: int
 
 class InventoryCreate(InventoryBase):
@@ -42,6 +79,8 @@ class InventoryCreate(InventoryBase):
 
 class InventoryResponse(InventoryBase):
     id: int
+    updated_at: datetime             # Added to match models.py
+    
     class Config:
         from_attributes = True
 
