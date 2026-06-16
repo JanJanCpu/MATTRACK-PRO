@@ -158,7 +158,7 @@ export const systemAPI = {
   healthCheck: () => fetchAPI<any>("/"),
 };
 
-// --- 6. SMART GEOCODING HELPER (WITH FALLBACK) ---
+// --- 6. SMART GEOCODING HELPER (PROGRESSIVE FALLBACK) ---
 export const geocodeAddress = async (addressText: string): Promise<{lat: number, lon: number} | null> => {
   try {
     // Helper function to make the API call
@@ -177,20 +177,28 @@ export const geocodeAddress = async (addressText: string): Promise<{lat: number,
     let result = await tryFetch(addressText);
     if (result) return result;
 
-    // Attempt 2: Smart Fallback. 
-    // If they typed "CNC Bldg, 1007 Quirino Ave", chop off "CNC Bldg" and try just the street.
-    if (addressText.includes(',')) {
-      const parts = addressText.split(',');
-      parts.shift(); // Remove the first highly-specific element
-      const fallbackAddress = parts.join(',').trim(); 
+    // Attempt 2+: Progressive Fallback
+    // Split the address by commas. Keep removing the first chunk and retrying until it works.
+    const parts = addressText.split(',').map(p => p.trim());
+    
+    // We limit to 3 fallback attempts so we don't spam the free API and get temporarily blocked
+    let attempts = 0;
+    while (parts.length > 1 && attempts < 3) {
+      parts.shift(); // Remove the most specific part (e.g., "1315")
+      const fallbackAddress = parts.join(', ');
       
-      if (fallbackAddress) {
-        console.log(`Fallback Search triggered for: ${fallbackAddress}`);
-        result = await tryFetch(fallbackAddress);
-        if (result) return result;
-      }
+      console.log(`Fallback attempt ${attempts + 1}: ${fallbackAddress}`);
+      
+      // Small 500ms delay to respect OpenStreetMap's free API rate limits
+      await new Promise(r => setTimeout(r, 500));
+      
+      result = await tryFetch(fallbackAddress);
+      if (result) return result;
+      
+      attempts++;
     }
 
+    // If it strips everything away and STILL fails, tell the UI to show the alert
     return null;
   } catch (error) {
     console.error("Geocoding failed:", error);
