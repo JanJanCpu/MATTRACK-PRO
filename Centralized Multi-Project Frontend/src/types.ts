@@ -4,6 +4,8 @@ export interface ProjectSite {
   site_name: string;
   latitude: number;
   longitude: number;
+  stage_status?: string;        // <-- ADDED to match backend
+  progress_percentage: number;  // <-- ADDED to match backend
 }
 
 export interface Inventory {

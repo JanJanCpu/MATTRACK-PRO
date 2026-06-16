@@ -58,6 +58,7 @@ class ProjectSite(Base):
     
     # NEW Integrations:
     stage_status = Column(String(50), default="Pre-construction") 
+    progress_percentage = Column(Integer, default=0) # Add this exact line
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     
     inventory = relationship("Inventory", back_populates="site")
@@ -96,6 +97,8 @@ class Supplier(Base):
     quality_rating = Column(Float, default=5.0)
     categories = Column(String, nullable=True)
     is_sister_company = Column(Boolean, default=False) 
+    
+    address = Column(String, nullable=True) # <--- ADDED THE MISSING COLUMN HERE
 
     # 1-to-Many Relationship to Materials
     materials = relationship("SupplierMaterial", back_populates="supplier", cascade="all, delete-orphan")

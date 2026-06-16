@@ -12,11 +12,8 @@ const API_BASE = "http://localhost:8000";
 async function fetchAPI<T>(endpoint: string, options?: RequestInit): Promise<T> {
   const url = `${API_BASE}${endpoint}`;
   
-  // 1. Get the secure token from local storage
   const token = localStorage.getItem("token");
   
-  // 2. Attach headers (including Auth if token exists)
-  // FIXED: Strictly typed as a string dictionary to satisfy TypeScript
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...(options?.headers as Record<string, string>),
@@ -48,7 +45,6 @@ async function fetchAPI<T>(endpoint: string, options?: RequestInit): Promise<T> 
 // --- 0. AUTHENTICATION APIs ---
 export const authAPI = {
   login: async (username: string, password: string) => {
-    // FastAPI requires form-data for login, not JSON!
     const formData = new URLSearchParams();
     formData.append("username", username);
     formData.append("password", password);
@@ -62,7 +58,6 @@ export const authAPI = {
     if (!response.ok) throw new Error("Invalid username or password");
     const data = await response.json();
     
-    // Save token to localStorage for the fetchAPI wrapper to use
     localStorage.setItem("token", data.access_token);
     return data;
   },
@@ -81,10 +76,17 @@ export const authAPI = {
 // --- 1. SITE APIs ---
 export const sitesAPI = {
   list: () => fetchAPI<ProjectSite[]>("/sites/"),
+  
   create: (siteData: { name: string; lat: number; lon: number }) =>
     fetchAPI<ProjectSite>("/sites/", {
       method: "POST",
       body: JSON.stringify(siteData),
+    }),
+
+  updateProgress: (id: number, stage_status: string, progress_percentage: number) =>
+    fetchAPI<ProjectSite>(`/sites/${id}/progress`, {
+      method: "PATCH",
+      body: JSON.stringify({ stage_status, progress_percentage }),
     }),
 };
 
@@ -92,7 +94,6 @@ export const sitesAPI = {
 export const inventoryAPI = {
   list: () => fetchAPI<Inventory[]>("/inventory/"),
   
-  // Replaced .create() with the new Audit Logging Endpoint
   logTransaction: (itemData: {
     item_name: string;
     brand: string;
@@ -112,36 +113,39 @@ export const inventoryAPI = {
 
   getLogs: () => fetchAPI<any[]>("/inventory/audit-logs"),
   
+  bulkUploadMapped: async (mappedItems: any[]) =>
+    fetchAPI<any>("/inventory/bulk-upload", {
+      method: "POST",
+      body: JSON.stringify(mappedItems),
+    }),
 };
 
 // --- 3. SUPPLIER APIs (CROWDSOURCING) ---
 export const suppliersAPI = {
   list: () => fetchAPI<Supplier[]>("/suppliers/"),
   
-  // Includes the new optional crowdsourced data
-  create: (supplierData: {
-    name: string;
-    contact: string;
-    lat: number;
-    lon: number;
-    rating: number;
-    material?: string;
-    price?: string;
-    stockLevel?: string;
-  }) =>
-    fetchAPI<Supplier>("/suppliers/", {
-      method: "POST",
-      body: JSON.stringify(supplierData),
+  create: (data: any) => fetchAPI<Supplier>("/suppliers/", { 
+    method: "POST", 
+    body: JSON.stringify(data) 
+  }),
+  
+  updateRating: (id: number, rating: number) =>
+    fetchAPI<any>(`/suppliers/${id}/rating`, { 
+      method: "PATCH", 
+      body: JSON.stringify({ rating }) 
+    }),
+
+  delete: (id: number) => 
+    fetchAPI<any>(`/suppliers/${id}`, { 
+      method: "DELETE" 
     }),
 };
 
 // --- 4. ADVISORY APIs ---
 export const advisoryAPI = {
-  // Your original deterministic engine
   procure: (site_id: number, item_name: string) =>
     fetchAPI<ProcurementAdvice[]>(`/advisory/procure/${site_id}/${item_name}`),
 
-  // The NEW AI Chatbot engine
   askAI: (message: string, context?: any) =>
     fetchAPI<any>("/advisory/chat", {
       method: "POST",
@@ -152,4 +156,44 @@ export const advisoryAPI = {
 // --- 5. SYSTEM APIs ---
 export const systemAPI = {
   healthCheck: () => fetchAPI<any>("/"),
+};
+
+// --- 6. SMART GEOCODING HELPER (WITH FALLBACK) ---
+export const geocodeAddress = async (addressText: string): Promise<{lat: number, lon: number} | null> => {
+  try {
+    // Helper function to make the API call
+    const tryFetch = async (queryStr: string) => {
+      const query = encodeURIComponent(`${queryStr}, Philippines`);
+      const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${query}&limit=1`);
+      const data = await response.json();
+      
+      if (data && data.length > 0) {
+        return { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
+      }
+      return null;
+    };
+
+    // Attempt 1: Try the exact address the user typed
+    let result = await tryFetch(addressText);
+    if (result) return result;
+
+    // Attempt 2: Smart Fallback. 
+    // If they typed "CNC Bldg, 1007 Quirino Ave", chop off "CNC Bldg" and try just the street.
+    if (addressText.includes(',')) {
+      const parts = addressText.split(',');
+      parts.shift(); // Remove the first highly-specific element
+      const fallbackAddress = parts.join(',').trim(); 
+      
+      if (fallbackAddress) {
+        console.log(`Fallback Search triggered for: ${fallbackAddress}`);
+        result = await tryFetch(fallbackAddress);
+        if (result) return result;
+      }
+    }
+
+    return null;
+  } catch (error) {
+    console.error("Geocoding failed:", error);
+    return null;
+  }
 };

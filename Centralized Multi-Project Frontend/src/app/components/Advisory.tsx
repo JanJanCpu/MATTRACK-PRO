@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { useLocation, useNavigate } from "react-router-dom"; // NEW: Imports for routing state
 import { AlertTriangle, CheckCircle, Send, Bot, User, Sparkles } from "lucide-react";
 import { inventoryAPI, advisoryAPI, sitesAPI } from "../../services/apiService";
 import type { Inventory } from "../../types";
@@ -10,6 +11,9 @@ interface ChatMessage {
 }
 
 export function Advisory() {
+  const location = useLocation();
+  const navigate = useNavigate();
+
   const [criticalItems, setCriticalItems] = useState<(Inventory & { siteName: string })[]>([]);
   const [loading, setLoading] = useState(false);
   
@@ -88,11 +92,22 @@ export function Advisory() {
     }
   };
 
-  // When clicking an item on the left, auto-generate a prompt for the AI
+  // When clicking an item on the left (or passed via Router), auto-generate a prompt
   const handleAskAboutItem = (item: Inventory & { siteName: string }) => {
     const prompt = `I have a ${item.status} shortage of ${item.quantity} ${item.unit} of ${item.item_name} at ${item.siteName}. Based on our unlisted suppliers, who offers the best price and fastest delivery?`;
     handleSendMessage(undefined, prompt);
   };
+
+  // NEW: Catch the passed state from Inventory.tsx
+  useEffect(() => {
+    if (location.state?.autoPromptItem) {
+      const item = location.state.autoPromptItem;
+      handleAskAboutItem(item);
+
+      // Clear the state from the router history so it doesn't re-trigger on page refresh
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+  }, [location.state, navigate]);
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500 h-[calc(100vh-8rem)] flex flex-col">

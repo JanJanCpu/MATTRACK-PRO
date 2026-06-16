@@ -54,12 +54,18 @@ class SiteCreate(BaseModel):
     lat: float
     lon: float
 
+# NEW: Added SiteProgressUpdate below SiteCreate
+class SiteProgressUpdate(BaseModel):
+    stage_status: str
+    progress_percentage: int
+
 class SiteResponse(BaseModel):
     id: int
     site_name: str
     latitude: float
     longitude: float
     stage_status: Optional[str] = None # Added to match models.py
+    progress_percentage: int = 0 # NEW: Added to handle the 0-100 number
 
     class Config:
         from_attributes = True
@@ -119,6 +125,7 @@ class SupplierCreate(BaseModel):
     lat: float
     lon: float
     rating: float
+    address: Optional[str] = None  # <--- FIXED: Added missing address field
     # These catch the extra data from your new React Pin Form
     material: Optional[str] = None
     price: Optional[str] = None
@@ -132,6 +139,7 @@ class SupplierResponse(BaseModel):
     longitude: float
     quality_rating: float
     is_sister_company: bool
+    address: Optional[str] = None  # <--- FIXED: Added missing address field
     
     # Returns the nested relational data
     materials: List[SupplierMaterialResponse] = []

@@ -2,7 +2,8 @@ from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
+from pydantic import BaseModel
 import math
 import requests
 import datetime
@@ -104,6 +105,18 @@ def create_site(site: schemas.SiteCreate, db: Session = Depends(get_db)):
     db.refresh(db_site)
     return db_site
 
+@app.patch("/sites/{site_id}/progress", response_model=schemas.SiteResponse, tags=["Sites"])
+def update_site_progress(site_id: int, req: schemas.SiteProgressUpdate, db: Session = Depends(get_db)):
+    site = db.query(models.ProjectSite).filter(models.ProjectSite.id == site_id).first()
+    if not site:
+        raise HTTPException(status_code=404, detail="Site not found")
+    
+    site.stage_status = req.stage_status
+    site.progress_percentage = req.progress_percentage
+    db.commit()
+    db.refresh(site)
+    return site
+
 # --- INVENTORY & AUDIT LOGGING ---
 @app.get("/inventory/", response_model=List[schemas.InventoryResponse], tags=["Inventory"])
 def list_inventory(db: Session = Depends(get_db)):
@@ -141,6 +154,50 @@ def log_stock_transaction(transaction: schemas.InventoryBase, token: str = Depen
     db.commit()
     return {"status": "Success", "message": action_text}
 
+# Bulk Upload Route
+@app.post("/inventory/bulk-upload", tags=["Inventory"])
+def bulk_upload_inventory(items: List[schemas.InventoryBase], token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    # 1. Verify who is doing the upload for the audit log
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        user_id: int = payload.get("id")
+    except jose.JWTError:
+        raise HTTPException(status_code=401, detail="Invalid Session")
+
+    added_count = 0
+    
+    # 2. Process each item in the bulk upload
+    for item_data in items:
+        # Check if this exact item/brand already exists at this site
+        existing_item = db.query(models.Inventory).filter(
+            models.Inventory.site_id == item_data.site_id,
+            models.Inventory.item_name == item_data.item_name,
+            models.Inventory.brand == item_data.brand
+        ).first()
+
+        if existing_item:
+            # If it exists, just add the new quantity to the existing stock
+            existing_item.quantity += item_data.quantity
+        else:
+            # If it's new, create a completely new row
+            new_item = models.Inventory(**item_data.dict())
+            db.add(new_item)
+            
+        added_count += 1
+
+    # 3. Save a single clean Audit Log for the whole batch
+    audit_log = models.ActivityLog(
+        user_id=user_id, 
+        action=f"User [{username}]: Bulk imported {added_count} items."
+    )
+    db.add(audit_log)
+    
+    # 4. Commit everything to the database at once
+    db.commit()
+    
+    return {"status": "Success", "message": f"Successfully imported {added_count} items!"}
+
 @app.get("/inventory/audit-logs", tags=["Inventory"])
 def get_recent_audit_logs(db: Session = Depends(get_db)):
     # Fetches the 5 most recent transactions/actions from the database
@@ -171,7 +228,8 @@ def create_supplier(s: schemas.SupplierCreate, db: Session = Depends(get_db)):
         latitude=s.lat, 
         longitude=s.lon, 
         quality_rating=s.rating,
-        is_sister_company=False
+        is_sister_company=False,
+        address=s.address
     )
     db.add(new_s)
     db.commit()
@@ -195,7 +253,34 @@ def create_supplier(s: schemas.SupplierCreate, db: Session = Depends(get_db)):
         db.commit()
         db.refresh(new_s) 
 
+
     return new_s
+
+class RatingUpdate(BaseModel):
+    rating: int
+
+@app.patch("/suppliers/{supplier_id}/rating", tags=["Logistics"])
+def update_supplier_rating(supplier_id: int, req: RatingUpdate, db: Session = Depends(get_db)):
+    supplier = db.query(models.Supplier).filter(models.Supplier.id == supplier_id).first()
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    
+    supplier.quality_rating = req.rating
+    db.commit()
+    return {"status": "success", "message": "Rating updated", "new_rating": supplier.quality_rating}
+
+# NEW: Delete Supplier Route
+@app.delete("/suppliers/{supplier_id}", tags=["Logistics"])
+def delete_supplier(supplier_id: int, db: Session = Depends(get_db)):
+    db_supplier = db.query(models.Supplier).filter(models.Supplier.id == supplier_id).first()
+    
+    if not db_supplier:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+        
+    db.delete(db_supplier)
+    db.commit()
+    
+    return {"status": "success", "message": f"Supplier {supplier_id} deleted"}
 
 # --- ADVISORY (DETERMINISTIC HEURISTIC INSTEAD OF AI) ---
 @app.get("/advisory/procure/{site_id}/{item_name}", tags=["Advisory"])
@@ -226,9 +311,6 @@ def procure_advice(site_id: int, item_name: str, db: Session = Depends(get_db)):
         })
             
     return sorted(recommendations, key=lambda x: x['score'], reverse=True)
-
-from pydantic import BaseModel
-from typing import Optional
 
 class ChatRequest(BaseModel):
     message: str

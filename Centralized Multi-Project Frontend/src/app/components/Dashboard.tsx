@@ -3,14 +3,12 @@ import {
   AlertTriangle,
   Truck,
   TrendingUp,
-  ArrowRight,
   BrainCircuit,
   Zap,
-  CheckCircle2,
-  Clock,
   Loader,
+  X // <-- Added for the modal close button
 } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useState, useEffect } from "react";
 import { sitesAPI, inventoryAPI } from "../../services/apiService";
 import type { ProjectSite, Inventory } from "../../types";
@@ -20,11 +18,18 @@ export function Dashboard() {
   const [inventory, setInventory] = useState<Inventory[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const navigate = useNavigate();
 
+  // --- NEW: Modal State Variables ---
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [selectedSiteId, setSelectedSiteId] = useState<number | null>(null);
+  const [updateForm, setUpdateForm] = useState({ stage: "Pre-construction", progress: 0 });
+
+  // 1. LIVE POLLING: Fetches data silently every 5 seconds
   useEffect(() => {
-    const fetchData = async () => {
+    const fetchData = async (isInitialLoad = false) => {
       try {
-        setLoading(true);
+        if (isInitialLoad) setLoading(true);
         setError(null);
         const [sitesData, inventoryData] = await Promise.all([
           sitesAPI.list(),
@@ -36,19 +41,38 @@ export function Dashboard() {
         console.error("Failed to fetch dashboard data:", err);
         setError(err instanceof Error ? err.message : "Failed to load data");
       } finally {
-        setLoading(false);
+        if (isInitialLoad) setLoading(false);
       }
     };
 
-    fetchData();
+    fetchData(true);
+
+    const interval = setInterval(() => {
+      fetchData(false);
+    }, 5000);
+
+    return () => clearInterval(interval);
   }, []);
 
-  // 1. FIXED: Real-time Metric Calculations from Database
+  // --- NEW: Save Progress Function ---
+  const handleSaveProgress = async () => {
+    if (!selectedSiteId) return;
+    try {
+      await sitesAPI.updateProgress(selectedSiteId, updateForm.stage, updateForm.progress);
+      setIsModalOpen(false);
+      
+      // Force an immediate UI refresh without waiting for the 5-second polling
+      const sitesData = await sitesAPI.list();
+      setSites(sitesData);
+    } catch (error) {
+      alert("Failed to update progress. Check your connection.");
+    }
+  };
+
+  // 2. REAL-TIME METRICS
   const criticalShortages = inventory.filter((i) => i.status === "Critical");
   const surplusItems = inventory.filter((i) => i.status === "Surplus");
-  const inTransitCount = inventory.filter(
-    (i) => i.status === "In Transit",
-  ).length;
+  const inTransitCount = inventory.filter((i) => i.status === "In Transit").length;
 
   const metrics = [
     {
@@ -81,8 +105,9 @@ export function Dashboard() {
     },
   ];
 
-  // 2. FIXED: Map projects to include actual shortage counts
-  const projects = sites.map((site, idx) => ({
+  // 3. PROJECT MAPPING (UPDATED FOR REAL DB PROGRESS)
+  const projects = sites.map((site) => ({
+    raw_id: site.id,
     id: `SITE-${site.id}`,
     name: site.site_name,
     location: `${site.latitude.toFixed(2)}, ${site.longitude.toFixed(2)}`,
@@ -91,13 +116,15 @@ export function Dashboard() {
     )
       ? "Critical"
       : "On Track",
-    progress: 30 + ((site.id * 7) % 60), // Progress remains estimated based on ID
+    // Pulling the real data straight from FastAPI:
+    progress: site.progress_percentage || 0, 
+    stage_status: site.stage_status || "Pre-construction", 
     shortages: inventory.filter(
       (i) => i.site_id === site.id && i.status === "Critical",
     ).length,
   }));
 
-  // 3. FIXED: Neural Net Advisory items now generated from real database states
+  // 4. NEURAL NET ADVISORY LOGIC
   const aiAdvisories = [];
 
   if (surplusItems.length > 0) {
@@ -134,7 +161,7 @@ export function Dashboard() {
   }
 
   return (
-    <div className="space-y-6 animate-in fade-in duration-500">
+    <div className="space-y-6 animate-in fade-in duration-500 relative">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-neutral-900">
@@ -146,12 +173,12 @@ export function Dashboard() {
           </p>
         </div>
         <div className="flex gap-3">
-          <button className="px-4 py-2 bg-white border border-neutral-200 text-neutral-700 font-medium rounded-lg text-sm hover:bg-neutral-50">
+          <button className="px-4 py-2 bg-white border border-neutral-200 text-neutral-700 font-medium rounded-lg text-sm hover:bg-neutral-50 transition-colors">
             Generate Report
           </button>
           <Link
             to="/advisory"
-            className="px-4 py-2 bg-emerald-600 text-white font-medium rounded-lg text-sm hover:bg-emerald-700 shadow-sm flex items-center gap-2"
+            className="px-4 py-2 bg-emerald-600 text-white font-medium rounded-lg text-sm hover:bg-emerald-700 shadow-sm flex items-center gap-2 transition-colors"
           >
             <Zap className="w-4 h-4" /> Smart Procure
           </Link>
@@ -174,7 +201,7 @@ export function Dashboard() {
               return (
                 <div
                   key={idx}
-                  className="bg-white p-5 border border-neutral-200 rounded-xl shadow-sm"
+                  className="bg-white p-5 border border-neutral-200 rounded-xl shadow-sm transition-all hover:shadow-md"
                 >
                   <div className="flex items-center gap-4">
                     <div className={`p-3 rounded-lg ${m.bg} ${m.color}`}>
@@ -203,7 +230,7 @@ export function Dashboard() {
                 </h2>
                 <Link
                   to="/projects"
-                  className="text-sm text-emerald-600 font-medium"
+                  className="text-sm text-emerald-600 font-medium hover:underline"
                 >
                   View Ledger
                 </Link>
@@ -216,23 +243,42 @@ export function Dashboard() {
                       <th className="px-6 py-3 font-medium">Progress</th>
                       <th className="px-6 py-3 font-medium">Status</th>
                       <th className="px-6 py-3 font-medium">Shortages</th>
+                      <th className="px-6 py-3 font-medium text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y">
                     {projects.map((p) => (
-                      <tr key={p.id} className="hover:bg-neutral-50/50">
-                        <td className="px-6 py-4 font-medium text-neutral-900">
-                          {p.name}
-                          <div className="text-xs text-neutral-400">{p.id}</div>
-                        </td>
+                      <tr 
+                        key={p.id} 
+                        onClick={() => navigate(`/projects/${p.raw_id}`)}
+                        className="hover:bg-emerald-50/50 cursor-pointer group transition-colors border-b border-neutral-100 last:border-0"
+                      >
                         <td className="px-6 py-4">
-                          <div className="w-24 h-1.5 bg-neutral-100 rounded-full">
+                          <div className="font-bold text-neutral-900 group-hover:text-emerald-600 transition-colors">
+                            {p.name}
+                          </div>
+                          <div className="text-xs text-neutral-400 font-mono mt-0.5">
+                            {p.id}
+                          </div>
+                        </td>
+                        
+                        {/* THE NEW DYNAMIC PROGRESS BAR */}
+                        <td className="px-6 py-4 min-w-[150px]">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-[10px] font-bold text-neutral-500 uppercase">{p.stage_status}</span>
+                            <span className="text-[10px] font-bold text-neutral-900">{p.progress}%</span>
+                          </div>
+                          <div className="w-full h-1.5 bg-neutral-200 rounded-full overflow-hidden">
                             <div
-                              className="h-full bg-emerald-500 rounded-full"
+                              className={`h-full rounded-full transition-all duration-500 ${
+                                p.progress < 30 ? "bg-red-500" : 
+                                p.progress < 70 ? "bg-amber-500" : "bg-emerald-500"
+                              }`}
                               style={{ width: `${p.progress}%` }}
                             />
                           </div>
                         </td>
+
                         <td className="px-6 py-4">
                           <span
                             className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${p.status === "Critical" ? "bg-red-100 text-red-700" : "bg-emerald-100 text-emerald-700"}`}
@@ -240,8 +286,23 @@ export function Dashboard() {
                             {p.status}
                           </span>
                         </td>
-                        <td className="px-6 py-4 font-bold text-red-600">
+                        <td className={`px-6 py-4 font-bold ${p.shortages > 0 ? "text-red-600" : "text-neutral-400"}`}>
                           {p.shortages > 0 ? `${p.shortages} items` : "-"}
+                        </td>
+
+                        {/* NEW UPDATE BUTTON */}
+                        <td className="px-6 py-4 text-right">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation(); // Prevents the row click from firing and navigating away
+                              setSelectedSiteId(p.raw_id);
+                              setUpdateForm({ stage: p.stage_status, progress: p.progress });
+                              setIsModalOpen(true);
+                            }}
+                            className="px-3 py-1.5 bg-blue-50 text-blue-600 hover:bg-blue-100 hover:text-blue-800 rounded-lg text-xs font-bold transition-colors"
+                          >
+                            Update
+                          </button>
                         </td>
                       </tr>
                     ))}
@@ -290,6 +351,83 @@ export function Dashboard() {
             </div>
           </div>
         </>
+      )}
+
+      {/* --- NEW: The Update Modal --- */}
+      {isModalOpen && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden">
+            <div className="p-4 border-b border-neutral-100 flex justify-between items-center bg-neutral-50">
+              <h2 className="text-lg font-bold text-neutral-900">Update Project Status</h2>
+              <button 
+                onClick={() => setIsModalOpen(false)}
+                className="p-1 hover:bg-neutral-200 rounded-md text-neutral-500 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="p-6 space-y-5">
+              <div>
+                <label className="block text-xs font-bold text-neutral-500 uppercase mb-2">
+                  Construction Stage
+                </label>
+                <select
+                  value={updateForm.stage}
+                  onChange={(e) => setUpdateForm({ ...updateForm, stage: e.target.value })}
+                  className="w-full p-3 border border-neutral-300 rounded-lg text-sm bg-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                >
+                  <option value="Pre-construction">Pre-construction</option>
+                  <option value="Foundation">Foundation</option>
+                  <option value="Framing">Framing</option>
+                  <option value="MEP">MEP (Mechanical, Electrical, Plumbing)</option>
+                  <option value="Finishing">Finishing</option>
+                  <option value="Turnover">Turnover / Completed</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-neutral-500 uppercase mb-2 flex justify-between">
+                  <span>Overall Progress</span>
+                  <span className="text-emerald-600">{updateForm.progress}%</span>
+                </label>
+                <div className="flex items-center gap-4">
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    value={updateForm.progress}
+                    onChange={(e) => setUpdateForm({ ...updateForm, progress: parseInt(e.target.value) || 0 })}
+                    className="w-full accent-emerald-600 h-2 bg-neutral-200 rounded-lg appearance-none cursor-pointer"
+                  />
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    value={updateForm.progress}
+                    onChange={(e) => setUpdateForm({ ...updateForm, progress: parseInt(e.target.value) || 0 })}
+                    className="w-20 p-2 border border-neutral-300 rounded-lg text-sm text-center focus:ring-2 focus:ring-emerald-500 outline-none"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="p-4 border-t border-neutral-100 flex justify-end gap-3 bg-neutral-50">
+              <button 
+                onClick={() => setIsModalOpen(false)} 
+                className="px-5 py-2.5 text-sm font-bold text-neutral-600 hover:bg-neutral-200 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={handleSaveProgress} 
+                className="px-5 py-2.5 bg-emerald-600 text-white text-sm font-bold rounded-lg hover:bg-emerald-700 transition-colors shadow-sm"
+              >
+                Save Changes
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
