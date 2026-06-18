@@ -1,8 +1,8 @@
 import datetime
+import enum
 from sqlalchemy import Column, Integer, String, Float, Boolean, ForeignKey, DateTime, Text, Enum as SQLEnum
 from sqlalchemy.orm import relationship 
 from database import Base
-import enum
 
 # --- ENUMS for System Logic ---
 class UserRole(str, enum.Enum):
@@ -14,6 +14,12 @@ class FSNStatus(str, enum.Enum):
     FAST = "FAST"
     SLOW = "SLOW"
     NON_MOVING = "NON_MOVING"
+
+# --- NEW: Transfer Status ENUM ---
+class TransferStatus(str, enum.Enum):
+    IN_TRANSIT = "IN_TRANSIT"
+    RECEIVED = "RECEIVED"
+    CANCELLED = "CANCELLED"
 
 # --- NEW: RBAC User Table ---
 class User(Base):
@@ -53,12 +59,15 @@ class ProjectSite(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     site_name = Column(String, unique=True, index=True)
+    
+    address = Column(String, nullable=True) 
+    
     latitude = Column(Float)
     longitude = Column(Float)
     
     # NEW Integrations:
     stage_status = Column(String(50), default="Pre-construction") 
-    progress_percentage = Column(Integer, default=0) # Add this exact line
+    progress_percentage = Column(Integer, default=0) 
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     
     inventory = relationship("Inventory", back_populates="site")
@@ -98,7 +107,7 @@ class Supplier(Base):
     categories = Column(String, nullable=True)
     is_sister_company = Column(Boolean, default=False) 
     
-    address = Column(String, nullable=True) # <--- ADDED THE MISSING COLUMN HERE
+    address = Column(String, nullable=True)
 
     # 1-to-Many Relationship to Materials
     materials = relationship("SupplierMaterial", back_populates="supplier", cascade="all, delete-orphan")
@@ -131,3 +140,29 @@ class MaterialRequest(Base):
     
     # Link back to site
     site = relationship("ProjectSite", back_populates="requests")
+
+# --- NEW: Digital Material Transfer Ticket (The Handshake) ---
+class MaterialTransfer(Base):
+    __tablename__ = "material_transfers"
+    __table_args__ = {'extend_existing': True}
+
+    id = Column(Integer, primary_key=True, index=True)
+    item_name = Column(String, index=True, nullable=False)
+    brand = Column(String(50), default="Generic/No Brand")
+    quantity = Column(Float, nullable=False)
+    unit = Column(String, nullable=False)
+
+    # The 3-Step Handshake Locations
+    source_site_id = Column(Integer, ForeignKey("project_sites.id"), nullable=False)
+    destination_site_id = Column(Integer, ForeignKey("project_sites.id"), nullable=False)
+
+    # State Protection
+    status = Column(String, default=TransferStatus.IN_TRANSIT.value)
+
+    # Audit Trail Timestamps
+    dispatched_at = Column(DateTime, default=datetime.datetime.utcnow)
+    received_at = Column(DateTime, nullable=True)
+
+    # Relationships mapping back to the ProjectSites
+    source_site = relationship("ProjectSite", foreign_keys=[source_site_id])
+    destination_site = relationship("ProjectSite", foreign_keys=[destination_site_id])

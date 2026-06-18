@@ -77,7 +77,7 @@ export const authAPI = {
 export const sitesAPI = {
   list: () => fetchAPI<ProjectSite[]>("/sites/"),
   
-  create: (siteData: { name: string; lat: number; lon: number }) =>
+  create: (siteData: { name: string; address?: string; lat: number; lon: number }) =>
     fetchAPI<ProjectSite>("/sites/", {
       method: "POST",
       body: JSON.stringify(siteData),
@@ -153,15 +153,38 @@ export const advisoryAPI = {
     }),
 };
 
-// --- 5. SYSTEM APIs ---
+// --- 5. MATERIAL TRANSFER APIs (The 3-Step Handshake) ---
+export const transferAPI = {
+  initiate: (transferData: {
+    source_site_id: number;
+    destination_site_id: number;
+    item_name: string;
+    brand: string;
+    quantity: number;
+    unit: string;
+  }) =>
+    fetchAPI<any>("/transfers/initiate", {
+      method: "POST",
+      body: JSON.stringify(transferData),
+    }),
+
+  getIncoming: (site_id: number) =>
+    fetchAPI<any[]>(`/transfers/incoming/${site_id}`),
+
+  receive: (transfer_id: number) =>
+    fetchAPI<any>(`/transfers/${transfer_id}/receive`, {
+      method: "POST",
+    }),
+};
+
+// --- 6. SYSTEM APIs ---
 export const systemAPI = {
   healthCheck: () => fetchAPI<any>("/"),
 };
 
-// --- 6. SMART GEOCODING HELPER (PROGRESSIVE FALLBACK) ---
+// --- 7. SMART GEOCODING HELPER (PROGRESSIVE FALLBACK) ---
 export const geocodeAddress = async (addressText: string): Promise<{lat: number, lon: number} | null> => {
   try {
-    // Helper function to make the API call
     const tryFetch = async (queryStr: string) => {
       const query = encodeURIComponent(`${queryStr}, Philippines`);
       const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${query}&limit=1`);
@@ -173,23 +196,17 @@ export const geocodeAddress = async (addressText: string): Promise<{lat: number,
       return null;
     };
 
-    // Attempt 1: Try the exact address the user typed
     let result = await tryFetch(addressText);
     if (result) return result;
 
-    // Attempt 2+: Progressive Fallback
-    // Split the address by commas. Keep removing the first chunk and retrying until it works.
     const parts = addressText.split(',').map(p => p.trim());
-    
-    // We limit to 3 fallback attempts so we don't spam the free API and get temporarily blocked
     let attempts = 0;
+    
     while (parts.length > 1 && attempts < 3) {
-      parts.shift(); // Remove the most specific part (e.g., "1315")
+      parts.shift(); 
       const fallbackAddress = parts.join(', ');
       
       console.log(`Fallback attempt ${attempts + 1}: ${fallbackAddress}`);
-      
-      // Small 500ms delay to respect OpenStreetMap's free API rate limits
       await new Promise(r => setTimeout(r, 500));
       
       result = await tryFetch(fallbackAddress);
@@ -198,7 +215,6 @@ export const geocodeAddress = async (addressText: string): Promise<{lat: number,
       attempts++;
     }
 
-    // If it strips everything away and STILL fails, tell the UI to show the alert
     return null;
   } catch (error) {
     console.error("Geocoding failed:", error);

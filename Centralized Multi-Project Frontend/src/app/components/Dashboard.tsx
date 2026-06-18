@@ -6,7 +6,10 @@ import {
   BrainCircuit,
   Zap,
   Loader,
-  X // <-- Added for the modal close button
+  X,
+  Download,
+  ArrowRight,
+  BellRing // Added for the new Smart Alerts title
 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { useState, useEffect } from "react";
@@ -18,18 +21,22 @@ export function Dashboard() {
   const [inventory, setInventory] = useState<Inventory[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false); 
+  
   const navigate = useNavigate();
 
-  // --- NEW: Modal State Variables ---
+  // --- Modal State Variables ---
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedSiteId, setSelectedSiteId] = useState<number | null>(null);
   const [updateForm, setUpdateForm] = useState({ stage: "Pre-construction", progress: 0 });
 
-  // 1. LIVE POLLING: Fetches data silently every 5 seconds
+  // 1. LIVE POLLING
   useEffect(() => {
     const fetchData = async (isInitialLoad = false) => {
       try {
         if (isInitialLoad) setLoading(true);
+        else setIsSyncing(true); 
+        
         setError(null);
         const [sitesData, inventoryData] = await Promise.all([
           sitesAPI.list(),
@@ -42,26 +49,20 @@ export function Dashboard() {
         setError(err instanceof Error ? err.message : "Failed to load data");
       } finally {
         if (isInitialLoad) setLoading(false);
+        setTimeout(() => setIsSyncing(false), 800); 
       }
     };
 
     fetchData(true);
-
-    const interval = setInterval(() => {
-      fetchData(false);
-    }, 5000);
-
+    const interval = setInterval(() => fetchData(false), 5000);
     return () => clearInterval(interval);
   }, []);
 
-  // --- NEW: Save Progress Function ---
   const handleSaveProgress = async () => {
     if (!selectedSiteId) return;
     try {
       await sitesAPI.updateProgress(selectedSiteId, updateForm.stage, updateForm.progress);
       setIsModalOpen(false);
-      
-      // Force an immediate UI refresh without waiting for the 5-second polling
       const sitesData = await sitesAPI.list();
       setSites(sitesData);
     } catch (error) {
@@ -69,7 +70,23 @@ export function Dashboard() {
     }
   };
 
-  // 2. REAL-TIME METRICS
+  const handleGenerateReport = () => {
+    const headers = ["Project ID", "Project Name", "Construction Stage", "Progress %", "Overall Status", "Critical Shortages"];
+    const rows = projects.map(p => [
+      p.id, `"${p.name}"`, p.stage_status, `${p.progress}%`, p.status, p.shortages
+    ]);
+    const csvContent = [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", `MatTrack_Project_Health_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // 2. REAL-TIME METRICS & ROUTING LOGIC
   const criticalShortages = inventory.filter((i) => i.status === "Critical");
   const surplusItems = inventory.filter((i) => i.status === "Surplus");
   const inTransitCount = inventory.filter((i) => i.status === "In Transit").length;
@@ -81,6 +98,8 @@ export function Dashboard() {
       icon: Building2,
       color: "text-blue-600",
       bg: "bg-blue-100",
+      // Action drops them into the Projects Ledger
+      action: () => navigate("/projects") 
     },
     {
       label: "Critical Material Shortages",
@@ -88,6 +107,8 @@ export function Dashboard() {
       icon: AlertTriangle,
       color: "text-red-600",
       bg: "bg-red-100",
+      // Action drops them into Inventory WITH a hidden state filter
+      action: () => navigate("/inventory", { state: { autoFilter: "Critical" } })
     },
     {
       label: "Pending Deliveries",
@@ -95,6 +116,8 @@ export function Dashboard() {
       icon: Truck,
       color: "text-amber-600",
       bg: "bg-amber-100",
+      // Action drops them into Inventory WITH a hidden state filter
+      action: () => navigate("/inventory", { state: { autoFilter: "In Transit" } })
     },
     {
       label: "Available Surplus Items",
@@ -102,29 +125,24 @@ export function Dashboard() {
       icon: TrendingUp,
       color: "text-emerald-600",
       bg: "bg-emerald-100",
+      // Action drops them into Inventory WITH a hidden state filter
+      action: () => navigate("/inventory", { state: { autoFilter: "Surplus" } })
     },
   ];
 
-  // 3. PROJECT MAPPING (UPDATED FOR REAL DB PROGRESS)
+  // 3. PROJECT MAPPING
   const projects = sites.map((site) => ({
     raw_id: site.id,
     id: `SITE-${site.id}`,
     name: site.site_name,
     location: `${site.latitude.toFixed(2)}, ${site.longitude.toFixed(2)}`,
-    status: inventory.some(
-      (i) => i.site_id === site.id && i.status === "Critical",
-    )
-      ? "Critical"
-      : "On Track",
-    // Pulling the real data straight from FastAPI:
+    status: inventory.some((i) => i.site_id === site.id && i.status === "Critical") ? "Critical" : "On Track",
     progress: site.progress_percentage || 0, 
     stage_status: site.stage_status || "Pre-construction", 
-    shortages: inventory.filter(
-      (i) => i.site_id === site.id && i.status === "Critical",
-    ).length,
+    shortages: inventory.filter((i) => i.site_id === site.id && i.status === "Critical").length,
   }));
 
-  // 4. NEURAL NET ADVISORY LOGIC
+  // 4. SMART PROCUREMENT ALERTS (Formerly Neural Net)
   const aiAdvisories = [];
 
   if (surplusItems.length > 0) {
@@ -132,9 +150,10 @@ export function Dashboard() {
       id: 1,
       type: "Surplus Transfer",
       material: surplusItems[0].item_name,
-      action: "Optimize allocation of internal surplus",
       reason: `Found ${surplusItems[0].quantity} ${surplusItems[0].unit} surplus at ${sites.find((s) => s.id === surplusItems[0].site_id)?.site_name || "Site"}.`,
       confidence: 92,
+      actionLabel: "View Routing Map",
+      onAction: () => navigate("/logistics") 
     });
   }
 
@@ -143,9 +162,10 @@ export function Dashboard() {
       id: 2,
       type: "Procurement",
       material: criticalShortages[0].item_name,
-      action: "Urgent Procurement Required",
-      reason: `AI recommends nearest verified supplier to resolve shortage at ${sites.find((s) => s.id === criticalShortages[0].site_id)?.site_name || "Site"}.`,
+      reason: `System recommends nearest verified supplier to resolve shortage at ${sites.find((s) => s.id === criticalShortages[0].site_id)?.site_name || "Site"}.`,
       confidence: 88,
+      actionLabel: "Find Suppliers",
+      onAction: () => navigate("/suppliers") 
     });
   }
 
@@ -153,9 +173,7 @@ export function Dashboard() {
     return (
       <div className="p-8 bg-red-50 border border-red-200 rounded-xl">
         <p className="text-red-800 font-bold">Connection Error: {error}</p>
-        <p className="text-sm text-red-700">
-          Check if FastAPI is running on port 8000.
-        </p>
+        <p className="text-sm text-red-700">Check if FastAPI is running on port 8000.</p>
       </div>
     );
   }
@@ -164,17 +182,23 @@ export function Dashboard() {
     <div className="space-y-6 animate-in fade-in duration-500 relative">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-neutral-900">
+          <h1 className="text-2xl font-bold text-neutral-900 flex items-center gap-3">
             Multi-Project Ledger
+            <span className="flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 text-emerald-700 rounded-full text-[10px] font-black tracking-widest uppercase border border-emerald-200">
+              <span className={`w-1.5 h-1.5 rounded-full bg-emerald-500 ${isSyncing ? 'animate-ping' : ''}`}></span>
+              Live Sync
+            </span>
           </h1>
           <p className="text-sm text-neutral-500 mt-1">
-            Real-time material tracking and AI procurement advisory for{" "}
-            {sites.length} active sites.
+            Real-time material tracking and procurement advisory for {sites.length} active sites.
           </p>
         </div>
         <div className="flex gap-3">
-          <button className="px-4 py-2 bg-white border border-neutral-200 text-neutral-700 font-medium rounded-lg text-sm hover:bg-neutral-50 transition-colors">
-            Generate Report
+          <button 
+            onClick={handleGenerateReport}
+            className="px-4 py-2 bg-white border border-neutral-200 text-neutral-700 font-medium rounded-lg text-sm hover:bg-neutral-50 transition-colors flex items-center gap-2"
+          >
+            <Download className="w-4 h-4" /> Export CSV
           </button>
           <Link
             to="/advisory"
@@ -188,27 +212,26 @@ export function Dashboard() {
       {loading ? (
         <div className="flex items-center justify-center p-20">
           <Loader className="w-8 h-8 text-emerald-600 animate-spin mr-3" />
-          <p className="text-neutral-600 font-medium">
-            Syncing with MatTrack Engine...
-          </p>
+          <p className="text-neutral-600 font-medium">Syncing with MatTrack Engine...</p>
         </div>
       ) : (
         <>
-          {/* Metrics Grid */}
+          {/* UPDATED: Metrics Grid (Now Clickable) */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             {metrics.map((m, idx) => {
               const Icon = m.icon;
               return (
                 <div
                   key={idx}
-                  className="bg-white p-5 border border-neutral-200 rounded-xl shadow-sm transition-all hover:shadow-md"
+                  onClick={m.action}
+                  className="bg-white p-5 border border-neutral-200 rounded-xl shadow-sm transition-all hover:shadow-md hover:border-emerald-400 cursor-pointer active:scale-[0.98] group"
                 >
                   <div className="flex items-center gap-4">
-                    <div className={`p-3 rounded-lg ${m.bg} ${m.color}`}>
+                    <div className={`p-3 rounded-lg ${m.bg} ${m.color} group-hover:scale-110 transition-transform`}>
                       <Icon className="w-6 h-6" />
                     </div>
                     <div>
-                      <p className="text-sm font-medium text-neutral-500">
+                      <p className="text-sm font-medium text-neutral-500 group-hover:text-emerald-700 transition-colors">
                         {m.label}
                       </p>
                       <p className="text-2xl font-bold text-neutral-900">
@@ -222,20 +245,19 @@ export function Dashboard() {
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Table */}
-            <div className="lg:col-span-2 bg-white border border-neutral-200 rounded-xl shadow-sm overflow-hidden">
+            <div className="lg:col-span-2 bg-white border border-neutral-200 rounded-xl shadow-sm overflow-hidden flex flex-col">
               <div className="px-6 py-5 border-b flex items-center justify-between">
                 <h2 className="font-semibold text-neutral-900">
                   Project Health Overview
                 </h2>
                 <Link
                   to="/projects"
-                  className="text-sm text-emerald-600 font-medium hover:underline"
+                  className="text-sm text-emerald-600 font-medium hover:underline flex items-center gap-1"
                 >
-                  View Ledger
+                  View Full Ledger <ArrowRight className="w-4 h-4" />
                 </Link>
               </div>
-              <div className="overflow-x-auto">
+              <div className="overflow-x-auto flex-1">
                 <table className="w-full text-left text-sm">
                   <thead className="bg-neutral-50 text-neutral-500 border-b">
                     <tr>
@@ -250,7 +272,7 @@ export function Dashboard() {
                     {projects.map((p) => (
                       <tr 
                         key={p.id} 
-                        onClick={() => navigate(`/projects/${p.raw_id}`)}
+                        onClick={() => navigate(`/projects`)} 
                         className="hover:bg-emerald-50/50 cursor-pointer group transition-colors border-b border-neutral-100 last:border-0"
                       >
                         <td className="px-6 py-4">
@@ -262,7 +284,6 @@ export function Dashboard() {
                           </div>
                         </td>
                         
-                        {/* THE NEW DYNAMIC PROGRESS BAR */}
                         <td className="px-6 py-4 min-w-[150px]">
                           <div className="flex items-center justify-between mb-1">
                             <span className="text-[10px] font-bold text-neutral-500 uppercase">{p.stage_status}</span>
@@ -290,11 +311,10 @@ export function Dashboard() {
                           {p.shortages > 0 ? `${p.shortages} items` : "-"}
                         </td>
 
-                        {/* NEW UPDATE BUTTON */}
                         <td className="px-6 py-4 text-right">
                           <button
                             onClick={(e) => {
-                              e.stopPropagation(); // Prevents the row click from firing and navigating away
+                              e.stopPropagation(); 
                               setSelectedSiteId(p.raw_id);
                               setUpdateForm({ stage: p.stage_status, progress: p.progress });
                               setIsModalOpen(true);
@@ -311,39 +331,41 @@ export function Dashboard() {
               </div>
             </div>
 
-            {/* AI Advisory Panel */}
-            <div className="lg:col-span-1 bg-slate-900 rounded-xl shadow-lg text-white overflow-hidden flex flex-col">
-              <div className="p-6 border-b border-slate-800 flex items-center gap-2">
-                <BrainCircuit className="w-5 h-5 text-emerald-400" />
-                <h2 className="font-semibold">Neural Net Advisory</h2>
+            {/* UPDATED: Smart Procurement Alerts */}
+            <div className="lg:col-span-1 bg-slate-900 rounded-xl shadow-lg text-white overflow-hidden flex flex-col border border-slate-800">
+              <div className="p-6 border-b border-slate-800 flex items-center gap-2 bg-slate-900">
+                <BellRing className="w-5 h-5 text-emerald-400" />
+                <h2 className="font-semibold">Smart Procurement Alerts</h2>
               </div>
-              <div className="p-6 flex-1 space-y-4">
+              <div className="p-6 flex-1 space-y-4 bg-slate-900/50">
                 {aiAdvisories.length > 0 ? (
                   aiAdvisories.map((adv) => (
                     <div
                       key={adv.id}
-                      className="bg-slate-800 p-4 rounded-lg border border-slate-700"
+                      className="bg-slate-800 p-4 rounded-lg border border-slate-700 hover:border-slate-500 transition-colors flex flex-col h-[180px]"
                     >
                       <div className="flex justify-between mb-2">
-                        <span className="text-[10px] font-bold bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded border border-emerald-500/30 uppercase">
+                        <span className="text-[10px] font-bold bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded border border-emerald-500/30 uppercase tracking-wider">
                           {adv.type}
-                        </span>
-                        <span className="text-[10px] text-slate-400">
-                          {adv.confidence}% Confidence
                         </span>
                       </div>
                       <h3 className="text-sm font-bold mb-1">{adv.material}</h3>
-                      <p className="text-xs text-slate-400 leading-relaxed">
+                      <p className="text-xs text-slate-400 leading-relaxed flex-1">
                         {adv.reason}
                       </p>
+                      <button 
+                        onClick={adv.onAction}
+                        className="mt-3 w-full py-2 bg-slate-700 hover:bg-emerald-600 text-xs font-bold rounded flex items-center justify-center gap-2 transition-colors"
+                      >
+                        {adv.actionLabel} <ArrowRight className="w-3 h-3" />
+                      </button>
                     </div>
                   ))
                 ) : (
                   <div className="h-full flex flex-col items-center justify-center text-center py-10">
                     <Zap className="w-8 h-8 text-slate-700 mb-3" />
                     <p className="text-xs text-slate-500">
-                      No urgent advisories. <br /> Add items with 'Critical' or
-                      'Surplus' status to trigger AI logic.
+                      System optimization normal. <br /> No critical alerts detected across your network.
                     </p>
                   </div>
                 )}
@@ -353,7 +375,7 @@ export function Dashboard() {
         </>
       )}
 
-      {/* --- NEW: The Update Modal --- */}
+      {/* The Update Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 animate-in fade-in">
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden">

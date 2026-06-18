@@ -99,7 +99,12 @@ def list_sites(db: Session = Depends(get_db)):
 
 @app.post("/sites/", response_model=schemas.SiteResponse, status_code=status.HTTP_201_CREATED, tags=["Sites"])
 def create_site(site: schemas.SiteCreate, db: Session = Depends(get_db)):
-    db_site = models.ProjectSite(site_name=site.name, latitude=site.lat, longitude=site.lon)
+    db_site = models.ProjectSite(
+        site_name=site.name, 
+        address=site.address, 
+        latitude=site.lat, 
+        longitude=site.lon
+    )
     db.add(db_site)
     db.commit()
     db.refresh(db_site)
@@ -124,7 +129,6 @@ def list_inventory(db: Session = Depends(get_db)):
 
 @app.post("/inventory/log", tags=["Inventory"])
 def log_stock_transaction(transaction: schemas.InventoryBase, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
-    # Decode token to verify user
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username: str = payload.get("sub")
@@ -132,7 +136,6 @@ def log_stock_transaction(transaction: schemas.InventoryBase, token: str = Depen
     except jose.JWTError:
         raise HTTPException(status_code=401, detail="Invalid Session")
     
-    # Fetch or update inventory item
     item = db.query(models.Inventory).filter(
         models.Inventory.site_id == transaction.site_id,
         models.Inventory.item_name == transaction.item_name,
@@ -142,13 +145,13 @@ def log_stock_transaction(transaction: schemas.InventoryBase, token: str = Depen
     action_text = ""
     if item:
         item.quantity += transaction.quantity
+        item.status = transaction.status 
         action_text = f"Updated {transaction.item_name} ({transaction.brand}) stock by {transaction.quantity} {transaction.unit}."
     else:
         item = models.Inventory(**transaction.dict())
         db.add(item)
         action_text = f"Initialized {transaction.quantity} {transaction.unit} of new item: {transaction.item_name}."
 
-    # Save tracking history log
     audit_log = models.ActivityLog(user_id=user_id, action=f"User [{username}]: {action_text}")
     db.add(audit_log)
     db.commit()
@@ -157,7 +160,6 @@ def log_stock_transaction(transaction: schemas.InventoryBase, token: str = Depen
 # Bulk Upload Route
 @app.post("/inventory/bulk-upload", tags=["Inventory"])
 def bulk_upload_inventory(items: List[schemas.InventoryBase], token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
-    # 1. Verify who is doing the upload for the audit log
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username: str = payload.get("sub")
@@ -167,9 +169,7 @@ def bulk_upload_inventory(items: List[schemas.InventoryBase], token: str = Depen
 
     added_count = 0
     
-    # 2. Process each item in the bulk upload
     for item_data in items:
-        # Check if this exact item/brand already exists at this site
         existing_item = db.query(models.Inventory).filter(
             models.Inventory.site_id == item_data.site_id,
             models.Inventory.item_name == item_data.item_name,
@@ -177,33 +177,25 @@ def bulk_upload_inventory(items: List[schemas.InventoryBase], token: str = Depen
         ).first()
 
         if existing_item:
-            # If it exists, just add the new quantity to the existing stock
             existing_item.quantity += item_data.quantity
         else:
-            # If it's new, create a completely new row
             new_item = models.Inventory(**item_data.dict())
             db.add(new_item)
             
         added_count += 1
 
-    # 3. Save a single clean Audit Log for the whole batch
     audit_log = models.ActivityLog(
         user_id=user_id, 
         action=f"User [{username}]: Bulk imported {added_count} items."
     )
     db.add(audit_log)
-    
-    # 4. Commit everything to the database at once
     db.commit()
     
     return {"status": "Success", "message": f"Successfully imported {added_count} items!"}
 
 @app.get("/inventory/audit-logs", tags=["Inventory"])
 def get_recent_audit_logs(db: Session = Depends(get_db)):
-    # Fetches the 5 most recent transactions/actions from the database
     logs = db.query(models.ActivityLog).order_by(models.ActivityLog.id.desc()).limit(5).all()
-    
-    # We format it so the frontend can easily read the timestamps and actions
     return [{"id": log.id, "action": log.action, "timestamp": "Just now" } for log in logs] 
 
 @app.delete("/inventory/{item_id}", tags=["Inventory"])
@@ -214,6 +206,117 @@ def delete_inventory_item(item_id: int, db: Session = Depends(get_db)):
     db.delete(db_item)
     db.commit()
     return {"status": "success", "message": f"Item {item_id} deleted"}
+
+# --- MATERIAL TRANSFERS (The 3-Step Handshake) ---
+@app.post("/transfers/initiate", tags=["Transfers"])
+def initiate_transfer(req: schemas.TransferCreate, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        user_id: int = payload.get("id")
+    except jose.JWTError:
+        raise HTTPException(status_code=401, detail="Invalid Session")
+
+    # 1. Deduct from Source Site
+    source_item = db.query(models.Inventory).filter(
+        models.Inventory.site_id == req.source_site_id,
+        models.Inventory.item_name == req.item_name,
+        models.Inventory.brand == req.brand
+    ).first()
+
+    if not source_item or source_item.quantity < req.quantity:
+        raise HTTPException(status_code=400, detail="Insufficient stock at source site to transfer.")
+
+    # Deduct quantity and auto-update status
+    source_item.quantity -= req.quantity
+    is_asset = source_item.unit in ["Unit", "Set"]
+    
+    if source_item.quantity == 0:
+        source_item.status = "In Use" if is_asset else "Critical"
+    elif source_item.quantity <= 10 and not is_asset:
+        source_item.status = "Low Stock"
+
+    # 2. Create the "In Transit" Ticket (The Void)
+    new_transfer = models.MaterialTransfer(
+        item_name=req.item_name,
+        brand=req.brand,
+        quantity=req.quantity,
+        unit=req.unit,
+        source_site_id=req.source_site_id,
+        destination_site_id=req.destination_site_id,
+        status=models.TransferStatus.IN_TRANSIT.value
+    )
+    db.add(new_transfer)
+
+    # 3. Write to Audit Trail
+    audit_log = models.ActivityLog(
+        user_id=user_id,
+        action=f"User [{username}]: Dispatched {req.quantity} {req.unit} of {req.item_name} from Site ID {req.source_site_id} to Site ID {req.destination_site_id}."
+    )
+    db.add(audit_log)
+
+    db.commit()
+    return {"status": "Success", "message": "Transfer initiated successfully."}
+
+@app.get("/transfers/incoming/{site_id}", response_model=List[schemas.TransferResponse], tags=["Transfers"])
+def get_incoming_transfers(site_id: int, db: Session = Depends(get_db)):
+    # Lets Site B check the void for incoming trucks
+    return db.query(models.MaterialTransfer).filter(
+        models.MaterialTransfer.destination_site_id == site_id,
+        models.MaterialTransfer.status == models.TransferStatus.IN_TRANSIT.value
+    ).all()
+
+@app.post("/transfers/{transfer_id}/receive", tags=["Transfers"])
+def receive_transfer(transfer_id: int, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        user_id: int = payload.get("id")
+    except jose.JWTError:
+        raise HTTPException(status_code=401, detail="Invalid Session")
+
+    # 1. Find the exact Transfer Ticket
+    transfer = db.query(models.MaterialTransfer).filter(models.MaterialTransfer.id == transfer_id).first()
+    if not transfer or transfer.status != models.TransferStatus.IN_TRANSIT.value:
+        raise HTTPException(status_code=404, detail="Active transfer not found.")
+
+    # 2. Mark as Received
+    transfer.status = models.TransferStatus.RECEIVED.value
+    transfer.received_at = datetime.datetime.utcnow()
+
+    # 3. Inject into Destination Inventory
+    dest_item = db.query(models.Inventory).filter(
+        models.Inventory.site_id == transfer.destination_site_id,
+        models.Inventory.item_name == transfer.item_name,
+        models.Inventory.brand == transfer.brand
+    ).first()
+
+    is_asset = transfer.unit in ["Unit", "Set"]
+
+    if dest_item:
+        dest_item.quantity += transfer.quantity
+        dest_item.status = "Available" if is_asset else "Healthy"
+    else:
+        new_item = models.Inventory(
+            item_name=transfer.item_name,
+            brand=transfer.brand,
+            quantity=transfer.quantity,
+            unit=transfer.unit,
+            status="Available" if is_asset else "Healthy",
+            fsn_status="FAST",
+            site_id=transfer.destination_site_id
+        )
+        db.add(new_item)
+
+    # 4. Write to Audit Trail
+    audit_log = models.ActivityLog(
+        user_id=user_id,
+        action=f"User [{username}]: Received {transfer.quantity} {transfer.unit} of {transfer.item_name} (Transfer ID: {transfer.id})."
+    )
+    db.add(audit_log)
+
+    db.commit()
+    return {"status": "Success", "message": "Transfer received successfully."}
 
 # --- SUPPLIERS ---
 @app.get("/suppliers/", response_model=List[schemas.SupplierResponse], tags=["Logistics"])
@@ -253,7 +356,6 @@ def create_supplier(s: schemas.SupplierCreate, db: Session = Depends(get_db)):
         db.commit()
         db.refresh(new_s) 
 
-
     return new_s
 
 class RatingUpdate(BaseModel):
@@ -269,7 +371,6 @@ def update_supplier_rating(supplier_id: int, req: RatingUpdate, db: Session = De
     db.commit()
     return {"status": "success", "message": "Rating updated", "new_rating": supplier.quality_rating}
 
-# NEW: Delete Supplier Route
 @app.delete("/suppliers/{supplier_id}", tags=["Logistics"])
 def delete_supplier(supplier_id: int, db: Session = Depends(get_db)):
     db_supplier = db.query(models.Supplier).filter(models.Supplier.id == supplier_id).first()
@@ -296,7 +397,6 @@ def procure_advice(site_id: int, item_name: str, db: Session = Depends(get_db)):
         dist = compute_distance(site.latitude, site.longitude, s.latitude, s.longitude)
         travel_time = get_real_travel_time(site.latitude, site.longitude, s.latitude, s.longitude)
         
-        # Deterministic scoring logic (Replaces the Neural Network)
         predicted_score = (s.quality_rating * 10) - (dist * 1.5)
         if getattr(s, 'is_sister_company', False):
             predicted_score += 15
@@ -318,10 +418,6 @@ class ChatRequest(BaseModel):
 
 @app.post("/advisory/chat", tags=["Advisory"])
 def chat_with_ai(req: ChatRequest, db: Session = Depends(get_db)):
-    # TODO: Integrate actual LLM API Key here later. 
-    # For now, return a secure mock response to prove the UI <-> Backend connection works.
-    
-    # We can fetch suppliers here to simulate context gathering
     supplier_count = db.query(models.Supplier).count()
     
     simulated_response = (

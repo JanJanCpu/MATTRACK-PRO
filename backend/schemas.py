@@ -51,10 +51,10 @@ class SiteBase(BaseModel):
 
 class SiteCreate(BaseModel):
     name: str 
+    address: Optional[str] = None 
     lat: float
     lon: float
 
-# NEW: Added SiteProgressUpdate below SiteCreate
 class SiteProgressUpdate(BaseModel):
     stage_status: str
     progress_percentage: int
@@ -62,22 +62,23 @@ class SiteProgressUpdate(BaseModel):
 class SiteResponse(BaseModel):
     id: int
     site_name: str
+    address: Optional[str] = None 
     latitude: float
     longitude: float
-    stage_status: Optional[str] = None # Added to match models.py
-    progress_percentage: int = 0 # NEW: Added to handle the 0-100 number
+    stage_status: Optional[str] = None 
+    progress_percentage: int = 0 
 
     class Config:
         from_attributes = True
 
-# --- INVENTORY (UPDATED) ---
+# --- INVENTORY ---
 class InventoryBase(BaseModel):
     item_name: str
-    brand: str = "Generic/No Brand"  # Added to match models.py
+    brand: str = "Generic/No Brand"
     quantity: float
     unit: str
     status: str
-    fsn_status: str = "FAST"         # Added to match models.py
+    fsn_status: str = "FAST"
     site_id: int
 
 class InventoryCreate(InventoryBase):
@@ -85,12 +86,12 @@ class InventoryCreate(InventoryBase):
 
 class InventoryResponse(InventoryBase):
     id: int
-    updated_at: datetime             # Added to match models.py
+    updated_at: datetime
     
     class Config:
         from_attributes = True
 
-# --- NEW: SUPPLIER MATERIALS ---
+# --- SUPPLIER MATERIALS ---
 class SupplierMaterialBase(BaseModel):
     material_name: str
     price: float
@@ -125,8 +126,7 @@ class SupplierCreate(BaseModel):
     lat: float
     lon: float
     rating: float
-    address: Optional[str] = None  # <--- FIXED: Added missing address field
-    # These catch the extra data from your new React Pin Form
+    address: Optional[str] = None
     material: Optional[str] = None
     price: Optional[str] = None
     stockLevel: Optional[str] = "High"
@@ -139,9 +139,8 @@ class SupplierResponse(BaseModel):
     longitude: float
     quality_rating: float
     is_sister_company: bool
-    address: Optional[str] = None  # <--- FIXED: Added missing address field
+    address: Optional[str] = None
     
-    # Returns the nested relational data
     materials: List[SupplierMaterialResponse] = []
 
     class Config:
@@ -156,5 +155,29 @@ class RequestCreate(BaseModel):
 class RequestResponse(RequestCreate):
     id: int
     status: str
+    class Config:
+        from_attributes = True
+
+# --- MATERIAL TRANSFERS (NEW) ---
+class TransferCreate(BaseModel):
+    source_site_id: int
+    destination_site_id: int
+    item_name: str
+    brand: str = "Generic/No Brand"
+    quantity: float
+    unit: str
+
+class TransferResponse(BaseModel):
+    id: int
+    item_name: str
+    brand: str
+    quantity: float
+    unit: str
+    source_site_id: int
+    destination_site_id: int
+    status: str
+    dispatched_at: datetime
+    received_at: Optional[datetime] = None
+
     class Config:
         from_attributes = True

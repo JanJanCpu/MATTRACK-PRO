@@ -1,10 +1,10 @@
 import { useLocation, Link, Outlet, useNavigate } from "react-router-dom";
 import { 
   LayoutDashboard, Boxes, BrainCircuit, Truck, Map as MapIcon, 
-  Settings, Bell, Search, User, Menu, Store, LogOut
+  Settings, Bell, Search, User, Menu, Store, LogOut, ShoppingCart, Package
 } from "lucide-react";
 import { useState, useEffect } from "react";
-import { inventoryAPI } from "../../services/apiService"; // <-- IMPORTED API SERVICE
+import { inventoryAPI, sitesAPI } from "../../services/apiService"; // <-- ADDED sitesAPI
 
 // 1. THE VIP LIST: We added 'allowedRoles' to dictate who sees what.
 const navItems = [
@@ -26,14 +26,17 @@ export function Layout() {
   const [userRole, setUserRole] = useState("staff"); 
   const [userName, setUserName] = useState("User");
 
-  // <-- NEW STATE FOR LIVE LOGS
+  // State for Live Logs & Omnisearch Data
   const [recentLogs, setRecentLogs] = useState<any[]>([]);
+  const [globalInventory, setGlobalInventory] = useState<any[]>([]);
+  const [globalSites, setGlobalSites] = useState<any[]>([]);
   
   const location = useLocation();
   const navigate = useNavigate();
 
-  // 2. THE CHECKPOST: Read the identity from the JWT Token and fetch logs
- useEffect(() => {
+  // 2. THE CHECKPOST & DATA SYNC
+  useEffect(() => {
+    // Auth Check
     const token = localStorage.getItem("token");
     if (token) {
       try {
@@ -45,24 +48,29 @@ export function Layout() {
       }
     }
 
-    const fetchLogs = async () => {
+    // Fetch Logs & Search Data
+    const fetchBackgroundData = async () => {
       try {
-        const logs = await inventoryAPI.getLogs();
+        const [logs, invData, sitesData] = await Promise.all([
+          inventoryAPI.getLogs(),
+          inventoryAPI.list(),
+          sitesAPI.list()
+        ]);
         setRecentLogs(logs);
+        setGlobalInventory(invData);
+        setGlobalSites(sitesData);
       } catch (err) {
-        console.error("Failed to load audit logs. The true error is:", err);
+        console.error("Failed to load background data:", err);
       }
     };
 
-    // 1. Fetch immediately when the layout loads
-    fetchLogs();
+    fetchBackgroundData(); // Fetch immediately
 
-    // 2. THE MAGIC FIX: Set up an interval to fetch logs every 3 seconds
+    // Poll for fresh logs and inventory every 10 seconds
     const interval = setInterval(() => {
-      fetchLogs();
-    }, 3000);
+      fetchBackgroundData();
+    }, 10000);
 
-    // 3. Clean up the interval if the user logs out or leaves
     return () => clearInterval(interval);
   }, []);
 
@@ -71,9 +79,15 @@ export function Layout() {
     navigate("/login");
   };
 
-  // 3. THE SHAPE-SHIFTER: Filter the menu before rendering it
+  // 3. THE SHAPE-SHIFTER
   const filteredNavItems = navItems.filter(item => 
     item.allowedRoles.includes(userRole)
+  );
+
+  // 4. OMNISEARCH LOGIC
+  const searchResults = searchQuery.trim() === "" ? [] : globalInventory.filter(item => 
+    item.item_name.toLowerCase().includes(searchQuery.toLowerCase()) || 
+    item.brand.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   return (
@@ -104,7 +118,6 @@ export function Layout() {
           </div>
         </div>
 
-        {/* 4. RENDER FILTERED MENU: Only items they are allowed to see */}
         <nav className="px-3 space-y-1 flex-1 overflow-y-auto">
           {filteredNavItems.map((item) => {
             const isActive = location.pathname === item.path;
@@ -127,7 +140,6 @@ export function Layout() {
         </nav>
 
         <div className="p-4 border-t border-slate-800 shrink-0 space-y-2">
-          {/* 5. HIDE SETTINGS FROM STAFF */}
           {["admin", "owner"].includes(userRole) && (
             <Link to="/settings" className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-slate-300 hover:bg-slate-800 hover:text-white transition-colors">
               <Settings className="w-5 h-5 text-slate-400" />
@@ -151,28 +163,87 @@ export function Layout() {
               <Menu className="w-5 h-5" />
             </button>
             
+            {/* --- OMNISEARCH BAR --- */}
             <div className="hidden md:flex items-center relative group">
               <Search className="w-4 h-4 absolute left-3 text-neutral-400" />
               <input 
                 type="text" 
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search projects, materials, suppliers..." 
-                className="pl-9 pr-4 py-2 w-80 text-sm bg-neutral-100 border border-transparent rounded-full focus:bg-white focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 transition-all outline-none"
+                placeholder="Search materials, tools, or brands..." 
+                className="pl-9 pr-4 py-2 w-[400px] text-sm bg-neutral-100 border border-transparent rounded-full focus:bg-white focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 transition-all outline-none"
               />
+              
+              {/* OMNISEARCH DROPDOWN RESULTS */}
               {searchQuery && (
-                <div className="absolute top-full left-0 mt-2 w-full bg-white border border-neutral-200 rounded-xl shadow-lg py-2">
-                  <div className="px-4 py-2 text-xs font-bold text-neutral-400 uppercase">Results for "{searchQuery}"</div>
-                  <div className="px-4 py-2 hover:bg-neutral-50 cursor-pointer text-sm text-neutral-700">Search globally in Inventory...</div>
-                  <div className="px-4 py-2 hover:bg-neutral-50 cursor-pointer text-sm text-neutral-700">Search in Suppliers...</div>
+                <div className="absolute top-full left-0 mt-2 w-[500px] bg-white border border-neutral-200 rounded-xl shadow-2xl py-2 max-h-[450px] overflow-y-auto z-50">
+                  <div className="px-4 py-2 text-[10px] font-bold text-neutral-400 uppercase tracking-wider border-b border-neutral-100">
+                    Network Inventory Results
+                  </div>
+                  
+                  {searchResults.length > 0 ? (
+                    searchResults.map(item => {
+                      // Find the site name based on the item's site_id
+                      const site = globalSites.find(s => s.id === item.site_id);
+                      
+                      return (
+                        <div key={item.id} className="px-4 py-3 hover:bg-neutral-50 border-b border-neutral-50 flex items-center justify-between group cursor-default">
+                          <div className="flex items-center gap-3">
+                            <div className="p-2 bg-slate-100 rounded-lg text-slate-500">
+                              <Package className="w-4 h-4" />
+                            </div>
+                            <div>
+                              <div className="font-bold text-neutral-900 text-sm">{item.item_name}</div>
+                              <div className="text-xs text-neutral-500">
+                                {item.brand} • <span className="text-emerald-600 font-medium">{site?.site_name || "Unknown Site"}</span>
+                              </div>
+                            </div>
+                          </div>
+                          
+                          <div className="flex items-center gap-4">
+                            <div className="text-right">
+                              <div className="font-black text-neutral-900 text-sm">
+                                {item.quantity} <span className="text-xs font-normal text-neutral-500">{item.unit}</span>
+                              </div>
+                              <div className={`text-[10px] font-bold uppercase ${item.status === 'Critical' ? 'text-red-500' : 'text-emerald-500'}`}>
+                                {item.status}
+                              </div>
+                            </div>
+                            
+                            {/* THE "OPTION TO BUY ANOTHER" BUTTON */}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSearchQuery(""); // Close search
+                                navigate('/suppliers'); // Send them to buy more
+                              }}
+                              className="p-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-600 hover:text-white transition-colors"
+                              title="Procure More"
+                            >
+                              <ShoppingCart className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      )
+                    })
+                  ) : (
+                    <div className="px-4 py-8 text-center text-sm text-neutral-500">
+                      No stock found for "{searchQuery}".
+                      <button 
+                        onClick={() => { setSearchQuery(""); navigate('/suppliers'); }}
+                        className="block mx-auto mt-2 text-emerald-600 font-medium hover:underline flex items-center justify-center gap-1"
+                      >
+                        <Search className="w-3 h-3" /> Find in Global Suppliers Network
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
           </div>
 
           <div className="flex items-center gap-4">
-            
-            {/* <-- UPDATED LIVE NOTIFICATIONS DROPDOWN --> */}
+            {/* LIVE NOTIFICATIONS DROPDOWN */}
             <div className="relative">
               <button 
                 onClick={() => setShowNotifications(!showNotifications)}
@@ -185,7 +256,7 @@ export function Layout() {
               </button>
               
               {showNotifications && (
-                <div className="absolute right-0 mt-2 w-80 bg-white border border-neutral-200 rounded-xl shadow-lg overflow-hidden">
+                <div className="absolute right-0 mt-2 w-80 bg-white border border-neutral-200 rounded-xl shadow-lg overflow-hidden z-50">
                   <div className="px-4 py-3 bg-neutral-50 border-b border-neutral-200 font-bold text-sm text-neutral-900 flex justify-between items-center">
                     System Audit Alerts
                     <span className="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">{recentLogs.length} New</span>
