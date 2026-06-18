@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Environments
 .venv/
 backend/.venv/
@@ -24,3 +25,11 @@ yarn-error.log*
 # OS Generated Files (Stops annoying hidden files from syncing)
 .DS_Store
 Thumbs.db
+=======
+node_modules/
+dist/
+.vite/
+.env
+.venv/
+__pycache__/
+>>>>>>> 03e32b669dae1e0ee7e021f62c528af294970c42
