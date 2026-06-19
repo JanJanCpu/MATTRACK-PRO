@@ -32,7 +32,7 @@ class User(Base):
     hashed_password = Column(String(255), nullable=False)
     role = Column(String(20), default=UserRole.STAFF.value, nullable=False)
     
-    # Owner profile details (Nullable if the user is staff/admin)
+    # Owner profile details
     company_name = Column(String(100), nullable=True)
     company_address = Column(Text, nullable=True)
     company_contact = Column(String(50), nullable=True)
@@ -47,7 +47,7 @@ class ActivityLog(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    action = Column(String(255), nullable=False) # e.g., "Added 50 bags of Holcim Cement"
+    action = Column(String(255), nullable=False) 
     timestamp = Column(DateTime, default=datetime.datetime.utcnow)
 
     user = relationship("User", back_populates="logs")
@@ -59,16 +59,17 @@ class ProjectSite(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     site_name = Column(String, unique=True, index=True)
-    
     address = Column(String, nullable=True) 
-    
     latitude = Column(Float)
     longitude = Column(Float)
     
-    # NEW Integrations:
     stage_status = Column(String(50), default="Pre-construction") 
     progress_percentage = Column(Integer, default=0) 
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    
+    # --- ADDED: RBAC MULTI-TENANCY LINK FROM CLASSMATE ---
+    manager_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    manager = relationship("User")
     
     inventory = relationship("Inventory", back_populates="site")
     requests = relationship("MaterialRequest", back_populates="site")
@@ -80,15 +81,13 @@ class Inventory(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     item_name = Column(String, index=True)
-    
-    # NEW Integrations:
     brand = Column(String(50), default="Generic/No Brand", nullable=False)
     fsn_status = Column(String(20), default=FSNStatus.FAST.value, nullable=False)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
     quantity = Column(Float)
     unit = Column(String)
-    status = Column(String) # e.g., "Critical", "Healthy"
+    status = Column(String) 
     site_id = Column(Integer, ForeignKey("project_sites.id"))
     
     site = relationship("ProjectSite", back_populates="inventory")
@@ -106,10 +105,8 @@ class Supplier(Base):
     quality_rating = Column(Float, default=5.0)
     categories = Column(String, nullable=True)
     is_sister_company = Column(Boolean, default=False) 
-    
     address = Column(String, nullable=True)
 
-    # 1-to-Many Relationship to Materials
     materials = relationship("SupplierMaterial", back_populates="supplier", cascade="all, delete-orphan")
 
 # --- EXISTING: Relational Sub-Table for Inventory ---
@@ -119,12 +116,10 @@ class SupplierMaterial(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     supplier_id = Column(Integer, ForeignKey("suppliers.id", ondelete="CASCADE"))
-    
     material_name = Column(String, index=True)
     price = Column(Float)
     stock_level = Column(String) 
 
-    # Link back to parent
     supplier = relationship("Supplier", back_populates="materials")
 
 # --- EXISTING: Material Requests ---
@@ -138,7 +133,6 @@ class MaterialRequest(Base):
     site_id = Column(Integer, ForeignKey("project_sites.id"))
     status = Column(String, default="Pending")
     
-    # Link back to site
     site = relationship("ProjectSite", back_populates="requests")
 
 # --- NEW: Digital Material Transfer Ticket (The Handshake) ---
@@ -152,17 +146,12 @@ class MaterialTransfer(Base):
     quantity = Column(Float, nullable=False)
     unit = Column(String, nullable=False)
 
-    # The 3-Step Handshake Locations
     source_site_id = Column(Integer, ForeignKey("project_sites.id"), nullable=False)
     destination_site_id = Column(Integer, ForeignKey("project_sites.id"), nullable=False)
-
-    # State Protection
     status = Column(String, default=TransferStatus.IN_TRANSIT.value)
 
-    # Audit Trail Timestamps
     dispatched_at = Column(DateTime, default=datetime.datetime.utcnow)
     received_at = Column(DateTime, nullable=True)
 
-    # Relationships mapping back to the ProjectSites
     source_site = relationship("ProjectSite", foreign_keys=[source_site_id])
     destination_site = relationship("ProjectSite", foreign_keys=[destination_site_id])

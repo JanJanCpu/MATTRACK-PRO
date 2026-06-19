@@ -6,20 +6,23 @@ from passlib.context import CryptContext
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 def seed_data():
+    # --- ADDED: THE DROP COMMAND ---
+    print("Dropping old database tables to apply new schema changes...")
+    Base.metadata.drop_all(bind=engine)
+
     print("Creating tables in PostgreSQL if they don't exist...")
     Base.metadata.create_all(bind=engine)
     
     db = SessionLocal()
     try:
+        # We don't strictly need these delete queries anymore since drop_all wiped the tables, 
+        # but leaving them in provides a safe fallback.
         print("Purging old multi-project records to clear local cache clusters...")
-        # Note: Delete in reverse order of foreign keys to avoid referential integrity blocks
         db.query(models.ActivityLog).delete() 
         db.query(models.Inventory).delete()
         db.query(models.MaterialRequest).delete()
         db.query(models.Supplier).delete()
         db.query(models.ProjectSite).delete()
-        
-        # --- CRITICAL: WIPE OLD USERS SO WE CAN INJECT THE NEW ONE ---
         db.query(models.User).delete() 
 
         # --- THE MASTER KEY: ADD THE ADMIN ACCOUNT ---
@@ -31,22 +34,34 @@ def seed_data():
             role="admin",
             company_name="Pentabuild Corp"
         )
-        db.add(admin)
-        db.commit() # Commit here so the admin gets User ID 1
+        
+        # --- NEW: ADD A STAFF MEMBER ---
+        print("Seeding a test Staff Member...")
+        staff_juan = models.User(
+            username="juan_staff",
+            email="juan@pentabuild.com",
+            hashed_password=pwd_context.hash("staff123"), 
+            role="staff",
+            company_name="Pentabuild Corp"
+        )
+        
+        # Add both to DB so they both get assigned an ID
+        db.add_all([admin, staff_juan])
+        db.commit() 
 
-        # 2. Add New Project Sites (Now with explicitly injected addresses!)
+        # 2. Add New Project Sites
         print("Injecting site matrices (Storage, Makati, Paco)...")
         storage = models.ProjectSite(
             site_name="Main Storage", address="Port Area, Manila", 
-            latitude=14.6042, longitude=120.9822
+            latitude=14.6042, longitude=120.9822, manager_id=admin.id # Link to Admin
         )
         makati = models.ProjectSite(
             site_name="Makati Fit-out", address="1200 Ayala Ave, Makati City", 
-            latitude=14.5547, longitude=121.0244
+            latitude=14.5547, longitude=121.0244, manager_id=admin.id # Link to Admin
         )
         paco = models.ProjectSite(
             site_name="Paco CNC Bldg", address="1007 Quirino Ave, Paco, Manila", 
-            latitude=14.5826, longitude=120.9931
+            latitude=14.5826, longitude=120.9931, manager_id=staff_juan.id # <-- STAFF MANAGES PACO
         )
         
         db.add_all([storage, makati, paco])
@@ -55,22 +70,14 @@ def seed_data():
         # 3. Add Suppliers
         print("Adding hardware trading hubs and industrial suppliers...")
         sup1 = models.Supplier(
-            name="Lumber Worx Trading Corp", 
-            address="Grace Park, Caloocan City", 
-            contact="0917-LUMBER-1", 
-            latitude=14.6534, 
-            longitude=120.9734, 
-            quality_rating=4.5,
-            categories="Lumber, Wood, Plywood"
+            name="Lumber Worx Trading Corp", address="Grace Park, Caloocan City", 
+            contact="0917-LUMBER-1", latitude=14.6534, longitude=120.9734, 
+            quality_rating=4.5, categories="Lumber, Wood, Plywood"
         )
         sup2 = models.Supplier(
-            name="Manila Steel Supply", 
-            address="Binondo, Manila", 
-            contact="0912-STEEL-2", 
-            latitude=14.6120, 
-            longitude=120.9650, 
-            quality_rating=4.2,
-            categories="Steel, Rebar"
+            name="Manila Steel Supply", address="Binondo, Manila", 
+            contact="0912-STEEL-2", latitude=14.6120, longitude=120.9650, 
+            quality_rating=4.2, categories="Steel, Rebar"
         )
         db.add_all([sup1, sup2])
 
@@ -88,7 +95,7 @@ def seed_data():
         
         db.add_all(inventory_items)
         db.commit()
-        print("✅ Database Seeded Successfully for MatTrack PRO clusters with Admin Account included!")
+        print("✅ Database Seeded Successfully for MatTrack PRO clusters with Admin & Staff Accounts included!")
 
     except Exception as e:
         db.rollback()

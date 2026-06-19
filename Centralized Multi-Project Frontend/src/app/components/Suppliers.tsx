@@ -34,7 +34,7 @@ export function Suppliers() {
   const [ratingEditId, setRatingEditId] = useState<number | null>(null);
 
   // Map & Form State
-  const [formData, setFormData] = useState({ name: "", contact: "", address: "", rating: "3" });
+  const [formData, setFormData] = useState({ name: "", contact: "", address: "", rating: 3 }); // Set default rating as number 3
   const [position, setPosition] = useState<[number, number]>([14.5995, 121.0366]); // Default Manila
   const [isSearching, setIsSearching] = useState(false);
 
@@ -70,20 +70,22 @@ export function Suppliers() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      // FIXED: Sending the exact structure expected by the API service
       await suppliersAPI.create({
         name: formData.name, 
         contact: formData.contact, 
-        lat: position[0], // Saved from the visual map!
+        lat: position[0], 
         lon: position[1], 
-        address: formData.address || undefined, 
-        rating: parseInt(formData.rating)
+        address: formData.address || "Location Unspecified", 
+        rating: formData.rating
       });
-      setFormData({ name: "", contact: "", address: "", rating: "3" });
+      
+      setFormData({ name: "", contact: "", address: "", rating: 3 });
       setPosition([14.5995, 121.0366]);
       setShowForm(false);
       loadSuppliers();
     } catch (err) {
-      alert("Failed to save supplier data.");
+      alert("Failed to save supplier data. Please check the console for details.");
     }
   };
 

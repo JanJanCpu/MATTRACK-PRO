@@ -1,43 +1,47 @@
+import { API_ENDPOINTS } from '../config';
 import type {
   ProjectSite,
   Inventory,
   Supplier,
   MaterialRequest,
+  InventoryGrouped,
   ProcurementAdvice,
-} from "../types";
+} from '../types';
 
-const API_BASE = "http://localhost:8000";
+// Fallback base URL for the new endpoints if they aren't in config yet
+const BASE_URL = "http://localhost:8000";
 
-// --- GLOBAL FETCH WRAPPER WITH JWT SECURITY ---
-async function fetchAPI<T>(endpoint: string, options?: RequestInit): Promise<T> {
-  const url = `${API_BASE}${endpoint}`;
-  
-  const token = localStorage.getItem("token");
-  
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    ...(options?.headers as Record<string, string>),
-  };
-
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
-
+// Error handling & Security wrapper
+async function fetchAPI<T>(
+  url: string,
+  options?: RequestInit
+): Promise<T> {
   try {
+    // --- CRITICAL RBAC FIX: Grab the JWT token from localStorage ---
+    const token = localStorage.getItem("token") || localStorage.getItem("access_token");
+    
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...((options?.headers as Record<string, string>) || {}),
+    };
+
+    // Inject the security token into the headers so FastAPI lets us in!
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
     const response = await fetch(url, {
       ...options,
       headers,
     });
 
     if (!response.ok) {
-      const errorDetail = await response.json().catch(() => ({}));
-      console.error("Backend Error:", errorDetail);
-      throw new Error(errorDetail.detail || `API Error: ${response.status}`);
+      throw new Error(`API Error: ${response.status} ${response.statusText}`);
     }
 
     return await response.json();
   } catch (error) {
-    console.error("API call failed:", error);
+    console.error('API call failed:', error);
     throw error;
   }
 }
@@ -49,7 +53,7 @@ export const authAPI = {
     formData.append("username", username);
     formData.append("password", password);
 
-    const response = await fetch(`${API_BASE}/token`, {
+    const response = await fetch(`${BASE_URL}/token`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: formData,
@@ -73,46 +77,54 @@ export const authAPI = {
   }
 };
 
-// --- 1. SITE APIs ---
+// Site APIs
 export const sitesAPI = {
-  list: () => fetchAPI<ProjectSite[]>("/sites/"),
-  
-  create: (siteData: { name: string; address?: string; lat: number; lon: number }) =>
-    fetchAPI<ProjectSite>("/sites/", {
-      method: "POST",
+  create: (siteData: { name: string; address?: string; lat: number; lon: number; manager_id: number }) =>
+    fetchAPI<ProjectSite>(API_ENDPOINTS.SITES_CREATE, {
+      method: 'POST',
       body: JSON.stringify(siteData),
     }),
 
+  list: () =>
+    fetchAPI<ProjectSite[]>(API_ENDPOINTS.SITES_LIST),
+
+  // FIXED: Added ${BASE_URL} so it hits the backend on port 8000
   updateProgress: (id: number, stage_status: string, progress_percentage: number) =>
-    fetchAPI<ProjectSite>(`/sites/${id}/progress`, {
+    fetchAPI<ProjectSite>(`${BASE_URL}/sites/${id}/progress`, {
       method: "PATCH",
       body: JSON.stringify({ stage_status, progress_percentage }),
     }),
 };
 
-// --- 2. INVENTORY & AUDIT APIs ---
+// Inventory APIs
 export const inventoryAPI = {
-  list: () => fetchAPI<Inventory[]>("/inventory/"),
-  
-  logTransaction: (itemData: {
-    item_name: string;
-    brand: string;
-    quantity: number;
-    unit: string;
-    status: string;
-    fsn_status: string;
-    site_id: number;
-  }) =>
-    fetchAPI<any>("/inventory/log", {
-      method: "POST",
-      body: JSON.stringify(itemData),
+  create: (item: Omit<Inventory, 'id'>) =>
+    fetchAPI<Inventory>(API_ENDPOINTS.INVENTORY_CREATE, {
+      method: 'POST',
+      body: JSON.stringify(item),
     }),
 
-  delete: (id: number) => 
-    fetchAPI<any>(`/inventory/${id}`, { method: "DELETE" }),
+  list: () =>
+    fetchAPI<Inventory[]>(API_ENDPOINTS.INVENTORY_LIST),
 
-  getLogs: () => fetchAPI<any[]>("/inventory/audit-logs"),
-  
+  grouped: () =>
+    fetchAPI<InventoryGrouped>(API_ENDPOINTS.INVENTORY_GROUPED),
+
+  // Log Delivery / Usage
+  logTransaction: (data: any) =>
+    fetchAPI(`${BASE_URL}/inventory/log`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  getLogs: () =>
+    fetchAPI<any[]>(`${BASE_URL}/inventory/audit-logs`),
+
+  delete: (id: number) =>
+    fetchAPI(`${BASE_URL}/inventory/${id}`, {
+      method: 'DELETE',
+    }),
+
   bulkUploadMapped: async (mappedItems: any[]) =>
     fetchAPI<any>("/inventory/bulk-upload", {
       method: "POST",
@@ -120,31 +132,55 @@ export const inventoryAPI = {
     }),
 };
 
-// --- 3. SUPPLIER APIs (CROWDSOURCING) ---
+// --- NEW: Material Transfer APIs (The 3-Step Handshake) ---
+export const transferAPI = {
+  initiate: (data: { source_site_id: number; destination_site_id: number; item_name: string; brand: string; quantity: number; unit: string; }) =>
+    fetchAPI(`${BASE_URL}/transfers/initiate`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  getIncoming: (site_id: number) =>
+    fetchAPI<any[]>(`${BASE_URL}/transfers/incoming/${site_id}`),
+
+  receive: (transfer_id: number) =>
+    fetchAPI(`${BASE_URL}/transfers/${transfer_id}/receive`, {
+      method: 'POST',
+    }),
+};
+
+// Supplier APIs
 export const suppliersAPI = {
-  list: () => fetchAPI<Supplier[]>("/suppliers/"),
-  
-  create: (data: any) => fetchAPI<Supplier>("/suppliers/", { 
-    method: "POST", 
-    body: JSON.stringify(data) 
-  }),
-  
+  create: (data: any) =>
+    fetchAPI<Supplier>(API_ENDPOINTS.SUPPLIERS_CREATE, {
+      method: 'POST',
+      body: JSON.stringify({
+        ...data,
+        rating: Number(data.rating) 
+      }),
+    }),
+
+  list: () =>
+    fetchAPI<Supplier[]>(API_ENDPOINTS.SUPPLIERS_LIST),
+
   updateRating: (id: number, rating: number) =>
-    fetchAPI<any>(`/suppliers/${id}/rating`, { 
+    fetchAPI<any>(`${BASE_URL}/suppliers/${id}/rating`, { 
       method: "PATCH", 
-      body: JSON.stringify({ rating }) 
+      body: JSON.stringify({ rating: Number(rating) }) 
     }),
 
   delete: (id: number) => 
-    fetchAPI<any>(`/suppliers/${id}`, { 
+    fetchAPI<any>(`${BASE_URL}/suppliers/${id}`, { 
       method: "DELETE" 
     }),
 };
 
-// --- 4. ADVISORY APIs ---
+// Advisory APIs
 export const advisoryAPI = {
   procure: (site_id: number, item_name: string) =>
-    fetchAPI<ProcurementAdvice[]>(`/advisory/procure/${site_id}/${item_name}`),
+    fetchAPI<ProcurementAdvice[]>(
+      API_ENDPOINTS.ADVISORY_PROCURE(site_id, item_name)
+    ),
 
   askAI: (message: string, context?: any) =>
     fetchAPI<any>("/advisory/chat", {
@@ -153,36 +189,25 @@ export const advisoryAPI = {
     }),
 };
 
-// --- 5. MATERIAL TRANSFER APIs (The 3-Step Handshake) ---
-export const transferAPI = {
-  initiate: (transferData: {
-    source_site_id: number;
-    destination_site_id: number;
-    item_name: string;
-    brand: string;
-    quantity: number;
-    unit: string;
-  }) =>
-    fetchAPI<any>("/transfers/initiate", {
-      method: "POST",
-      body: JSON.stringify(transferData),
+// Material Request APIs
+export const requestsAPI = {
+  create: (item: Omit<MaterialRequest, 'id'>) =>
+    fetchAPI<MaterialRequest>(API_ENDPOINTS.REQUESTS_CREATE, {
+      method: 'POST',
+      body: JSON.stringify(item),
     }),
 
-  getIncoming: (site_id: number) =>
-    fetchAPI<any[]>(`/transfers/incoming/${site_id}`),
-
-  receive: (transfer_id: number) =>
-    fetchAPI<any>(`/transfers/${transfer_id}/receive`, {
-      method: "POST",
-    }),
+  list: () =>
+    fetchAPI<MaterialRequest[]>(API_ENDPOINTS.REQUESTS_LIST),
 };
 
-// --- 6. SYSTEM APIs ---
+// Health check
 export const systemAPI = {
-  healthCheck: () => fetchAPI<any>("/"),
+  healthCheck: () =>
+    fetchAPI(API_ENDPOINTS.HEALTH_CHECK),
 };
 
-// --- 7. SMART GEOCODING HELPER (PROGRESSIVE FALLBACK) ---
+// --- SMART GEOCODING HELPER ---
 export const geocodeAddress = async (addressText: string): Promise<{lat: number, lon: number} | null> => {
   try {
     const tryFetch = async (queryStr: string) => {
@@ -220,4 +245,16 @@ export const geocodeAddress = async (addressText: string): Promise<{lat: number,
     console.error("Geocoding failed:", error);
     return null;
   }
+};
+
+// --- NEW: User & Team Management APIs ---
+export const usersAPI = {
+  create: (userData: any) =>
+    fetchAPI(`${BASE_URL}/register`, {
+      method: 'POST',
+      body: JSON.stringify(userData),
+    }),
+
+  getStaff: () =>
+    fetchAPI<any[]>(`${BASE_URL}/users/managers`),
 };

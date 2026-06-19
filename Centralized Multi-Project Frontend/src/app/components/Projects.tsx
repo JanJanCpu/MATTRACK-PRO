@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from "react";
-import { sitesAPI, inventoryAPI, transferAPI, geocodeAddress } from "../../services/apiService";
+import { sitesAPI, inventoryAPI, transferAPI, geocodeAddress, usersAPI } from "../../services/apiService"; // ADDED usersAPI
 import { 
   Building2, Plus, Loader, MapPin, Search, ArrowLeft, 
-  Package, ArrowRightLeft, Map, X, ArrowDownToLine, ArrowUpFromLine, Send, Truck, CheckCircle2
+  Package, ArrowRightLeft, Map as MapIcon, X, ArrowDownToLine, ArrowUpFromLine, Send, Truck, CheckCircle2
 } from "lucide-react";
 import { MapContainer, TileLayer, Marker, useMapEvents, useMap } from "react-leaflet";
 import L from "leaflet";
@@ -35,7 +35,7 @@ export function Projects() {
   // --- Drill-Down State ---
   const [activeSite, setActiveSite] = useState<ProjectSite | null>(null);
   const [siteInventory, setSiteInventory] = useState<Inventory[]>([]);
-  const [incomingTransfers, setIncomingTransfers] = useState<any[]>([]); // NEW: Tracks trucks on the way
+  const [incomingTransfers, setIncomingTransfers] = useState<any[]>([]);
 
   // --- Modal States ---
   const [modalType, setModalType] = useState<"IN" | "OUT" | "TRANSFER" | null>(null);
@@ -44,13 +44,18 @@ export function Projects() {
     brand: "Generic/No Brand",
     quantity: 0,
     unit: "Bags",
-    destination_site_id: "" // NEW: For Transfers
+    destination_site_id: "" 
   });
 
+  // --- Form States for New Site ---
   const [name, setName] = useState("");
   const [address, setAddress] = useState("");
   const [isSearching, setIsSearching] = useState(false);
   const [position, setPosition] = useState<[number, number]>([14.5995, 121.0366]);
+  
+  // --- NEW: Staff Management State ---
+  const [staffList, setStaffList] = useState<any[]>([]);
+  const [selectedManager, setSelectedManager] = useState<number | "">("");
 
   const loadSites = async () => {
     try {
@@ -64,22 +69,32 @@ export function Projects() {
     }
   };
 
+  // Fetch the staff list when loading sites
+  useEffect(() => { 
+    loadSites(); 
+    const loadStaff = async () => {
+      try {
+        const data = await usersAPI.getStaff();
+        setStaffList(data);
+      } catch (err) {
+        console.error("Failed to load staff list", err);
+      }
+    };
+    loadStaff();
+  }, []);
+
   const loadSiteInventory = async (siteId: number) => {
     try {
-      // Fetch local inventory
       const allInventory = await inventoryAPI.list();
       const localStock = allInventory.filter(item => item.site_id === siteId);
       setSiteInventory(localStock);
 
-      // Fetch items currently IN TRANSIT to this site
       const incoming = await transferAPI.getIncoming(siteId);
       setIncomingTransfers(incoming);
     } catch (err) {
       console.error("Failed to load inventory/transfers for site", err);
     }
   };
-
-  useEffect(() => { loadSites(); }, []);
 
   useEffect(() => {
     if (activeSite) loadSiteInventory(activeSite.id);
@@ -101,9 +116,23 @@ export function Projects() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    // Check if manager is selected
+    if (selectedManager === "") {
+      alert("Please assign a Project Manager / Staff member to this site.");
+      return;
+    }
+
     try {
-      await sitesAPI.create({ name, address, lat: position[0], lon: position[1] });
-      setName(""); setAddress(""); setPosition([14.5995, 121.0366]);
+      await sitesAPI.create({ 
+        name, 
+        address, 
+        lat: position[0], 
+        lon: position[1],
+        manager_id: Number(selectedManager) // Passed to backend
+      });
+      
+      setName(""); setAddress(""); setPosition([14.5995, 121.0366]); setSelectedManager("");
       setShowForm(false);
       loadSites();
       alert("Project Site Saved Successfully!");
@@ -112,19 +141,17 @@ export function Projects() {
     }
   };
 
-  // --- NEW: THE RECEIPT CONFIRMATION ---
   const handleReceiveTransfer = async (transferId: number) => {
     if (!activeSite) return;
     try {
       await transferAPI.receive(transferId);
       alert("Delivery Confirmed! Items added to your inventory.");
-      loadSiteInventory(activeSite.id); // Refresh tables
+      loadSiteInventory(activeSite.id);
     } catch (err) {
       alert("Failed to confirm receipt.");
     }
   };
 
-  // --- BODEGERO TRANSACTION LOGIC ---
   const handleTransactionSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeSite || !modalType) return;
@@ -135,7 +162,6 @@ export function Projects() {
       i.brand.toLowerCase() === transactionForm.brand.toLowerCase()
     );
 
-    // --- NEW: TRANSFER LOGIC (3-STEP HANDSHAKE) ---
     if (modalType === "TRANSFER") {
         if (!transactionForm.destination_site_id) return alert("Select a destination site.");
         if (!existingItem || existingItem.quantity < transactionForm.quantity) {
@@ -158,10 +184,9 @@ export function Projects() {
         } catch (err) {
             alert("Failed to initiate transfer.");
         }
-        return; // Exit out, don't run the standard IN/OUT logic
+        return; 
     }
 
-    // --- STANDARD IN/OUT LOGIC ---
     let finalQuantity = transactionForm.quantity;
     let finalStatus = "Healthy";
 
@@ -259,7 +284,6 @@ export function Projects() {
           </div>
         </div>
 
-        {/* --- NEW: INCOMING DELIVERIES PANEL --- */}
         {incomingTransfers.length > 0 && (
           <div className="bg-amber-50 border border-amber-200 rounded-xl shadow-sm overflow-hidden animate-in fade-in">
             <div className="p-4 border-b border-amber-200 flex items-center justify-between">
@@ -310,7 +334,6 @@ export function Projects() {
           </div>
         )}
 
-        {/* --- SITE INVENTORY --- */}
         <div className="bg-white border border-neutral-200 rounded-xl shadow-sm overflow-hidden">
           <div className="p-4 border-b border-neutral-200 bg-neutral-50 flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -357,7 +380,6 @@ export function Projects() {
           </div>
         </div>
 
-        {/* --- TRANSACTION & TRANSFER MODALS --- */}
         {modalType && (
           <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 animate-in fade-in">
             <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden">
@@ -378,7 +400,6 @@ export function Projects() {
               
               <form onSubmit={handleTransactionSubmit} className="p-6 space-y-5">
                 
-                {/* NEW: Destination Site Dropdown (Only for transfers) */}
                 {modalType === "TRANSFER" && (
                   <div>
                     <label className="block text-xs font-bold text-neutral-500 uppercase mb-2 text-blue-600">Destination Project Site</label>
@@ -499,6 +520,24 @@ export function Projects() {
               <input value={name} onChange={(e) => setName(e.target.value)} className="w-full p-3 border rounded-lg text-sm bg-neutral-50 focus:ring-2 focus:ring-emerald-500 outline-none" placeholder="e.g. Makati Central Hub" required />
             </div>
 
+            {/* --- ADDED DROPDOWN TO SELECT THE SITE MANAGER --- */}
+            <div>
+              <label className="block text-xs font-bold text-neutral-500 uppercase mb-1">Assign Project Manager</label>
+              <select
+                required
+                value={selectedManager}
+                onChange={(e) => setSelectedManager(Number(e.target.value))}
+                className="w-full p-3 border rounded-lg text-sm bg-neutral-50 focus:ring-2 focus:ring-emerald-500 outline-none"
+              >
+                <option value="" disabled>Select a Staff Member...</option>
+                {staffList.map((staff) => (
+                  <option key={staff.id} value={staff.id}>
+                    {staff.username} ({staff.email})
+                  </option>
+                ))}
+              </select>
+            </div>
+
             <div>
               <label className="block text-xs font-bold text-neutral-500 uppercase mb-1">Site Address</label>
               <div className="flex gap-2">
@@ -570,7 +609,7 @@ export function Projects() {
                           <span className="truncate max-w-[200px]">{(site as any).address || "Address pending database sync"}</span>
                         </div>
                         <div className="flex items-center gap-1 font-mono text-[10px] text-neutral-400">
-                          <Map className="w-3 h-3" />
+                          <MapIcon className="w-3 h-3" />
                           {site.latitude.toFixed(4)}, {site.longitude.toFixed(4)}
                         </div>
                       </div>

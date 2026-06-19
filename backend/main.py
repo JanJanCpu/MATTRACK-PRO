@@ -16,7 +16,6 @@ from database import engine, get_db
 
 app = FastAPI(title="MatTrack PRO API", version="2.0.0")
 
-# 1. Optimized CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"], 
@@ -25,13 +24,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 2. Database Initialization
 models.Base.metadata.create_all(bind=engine) 
 
-# --- SECURITY & AUTHENTICATION CONFIG ---
 SECRET_KEY = "SUPER_SECRET_SECURITY_TOKEN_REPLACE_THIS_FOR_PRODUCTION"
 ALGORITHM = "HS256"
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+pwd_context = CryptContext(
+    schemes=["bcrypt"],
+    deprecated="auto"
+)
+
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 def hash_password(password: str):
@@ -42,11 +44,10 @@ def verify_password(plain_password, hashed_password):
 
 def create_access_token(data: dict):
     to_encode = data.copy()
-    expire = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
+    expire = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=8)
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
-# --- UTILS ---
 def compute_distance(lat1, lon1, lat2, lon2):
     R = 6371 
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
@@ -72,11 +73,8 @@ def register_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
     
     hashed = hash_password(user.password)
     new_user = models.User(
-        username=user.username,
-        email=user.email,
-        hashed_password=hashed,
-        role=user.role,
-        company_name=user.company_name
+        username=user.username, email=user.email, hashed_password=hashed,
+        role=user.role, company_name=user.company_name
     )
     db.add(new_user)
     db.commit()
@@ -92,30 +90,70 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
     token = create_access_token({"sub": user.username, "role": user.role, "id": user.id})
     return {"access_token": token, "token_type": "bearer"}
 
+@app.get("/users/me", response_model=schemas.UserResponse, tags=["Auth"])
+def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+    except jose.JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    
+    user = db.query(models.User).filter(models.User.username == username).first()
+    if not user: raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+@app.get("/users/managers", response_model=List[schemas.UserResponse], tags=["Users"])
+def get_managers(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    return db.query(models.User).filter(models.User.role == "staff").all()
+
 # --- SITES ---
 @app.get("/sites/", response_model=List[schemas.SiteResponse], tags=["Sites"])
-def list_sites(db: Session = Depends(get_db)):
-    return db.query(models.ProjectSite).all()
+def list_sites(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_role: str = payload.get("role", "").lower()
+        user_id: int = payload.get("id")
+    except jose.JWTError:
+        raise HTTPException(status_code=401, detail="Invalid Session")
+
+    if user_role in ["owner", "admin"]:
+        return db.query(models.ProjectSite).all()
+    return db.query(models.ProjectSite).filter(models.ProjectSite.manager_id == user_id).all()
 
 @app.post("/sites/", response_model=schemas.SiteResponse, status_code=status.HTTP_201_CREATED, tags=["Sites"])
-def create_site(site: schemas.SiteCreate, db: Session = Depends(get_db)):
-    db_site = models.ProjectSite(
-        site_name=site.name, 
-        address=site.address, 
-        latitude=site.lat, 
-        longitude=site.lon
-    )
+def create_site(site: schemas.SiteCreate, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_role: str = payload.get("role", "").lower()
+        user_id: int = payload.get("id")
+    except jose.JWTError:
+        raise HTTPException(status_code=401, detail="Invalid Session")
+        
+    assigned_manager = site.manager_id
+    if user_role == "staff":
+        assigned_manager = user_id
+
+    db_site = models.ProjectSite(site_name=site.name, address=site.address, latitude=site.lat, longitude=site.lon, manager_id=assigned_manager)
     db.add(db_site)
     db.commit()
     db.refresh(db_site)
     return db_site
 
 @app.patch("/sites/{site_id}/progress", response_model=schemas.SiteResponse, tags=["Sites"])
-def update_site_progress(site_id: int, req: schemas.SiteProgressUpdate, db: Session = Depends(get_db)):
+def update_site_progress(site_id: int, req: schemas.SiteProgressUpdate, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_role: str = payload.get("role", "").lower()
+        user_id: int = payload.get("id")
+    except jose.JWTError:
+        raise HTTPException(status_code=401, detail="Invalid Session")
+
     site = db.query(models.ProjectSite).filter(models.ProjectSite.id == site_id).first()
-    if not site:
-        raise HTTPException(status_code=404, detail="Site not found")
+    if not site: raise HTTPException(status_code=404, detail="Site not found")
     
+    if user_role == "staff" and site.manager_id != user_id:
+        raise HTTPException(status_code=403, detail="Unauthorized write operation")
+        
     site.stage_status = req.stage_status
     site.progress_percentage = req.progress_percentage
     db.commit()
@@ -124,8 +162,17 @@ def update_site_progress(site_id: int, req: schemas.SiteProgressUpdate, db: Sess
 
 # --- INVENTORY & AUDIT LOGGING ---
 @app.get("/inventory/", response_model=List[schemas.InventoryResponse], tags=["Inventory"])
-def list_inventory(db: Session = Depends(get_db)):
-    return db.query(models.Inventory).all()
+def list_inventory(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_role: str = payload.get("role", "").lower()
+        user_id: int = payload.get("id")
+    except jose.JWTError:
+        raise HTTPException(status_code=401, detail="Invalid Session")
+
+    if user_role in ["owner", "admin"]:
+        return db.query(models.Inventory).all()
+    return db.query(models.Inventory).join(models.ProjectSite).filter(models.ProjectSite.manager_id == user_id).all()
 
 @app.post("/inventory/log", tags=["Inventory"])
 def log_stock_transaction(transaction: schemas.InventoryBase, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
@@ -157,7 +204,6 @@ def log_stock_transaction(transaction: schemas.InventoryBase, token: str = Depen
     db.commit()
     return {"status": "Success", "message": action_text}
 
-# Bulk Upload Route
 @app.post("/inventory/bulk-upload", tags=["Inventory"])
 def bulk_upload_inventory(items: List[schemas.InventoryBase], token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     try:
@@ -168,7 +214,6 @@ def bulk_upload_inventory(items: List[schemas.InventoryBase], token: str = Depen
         raise HTTPException(status_code=401, detail="Invalid Session")
 
     added_count = 0
-    
     for item_data in items:
         existing_item = db.query(models.Inventory).filter(
             models.Inventory.site_id == item_data.site_id,
@@ -181,16 +226,11 @@ def bulk_upload_inventory(items: List[schemas.InventoryBase], token: str = Depen
         else:
             new_item = models.Inventory(**item_data.dict())
             db.add(new_item)
-            
         added_count += 1
 
-    audit_log = models.ActivityLog(
-        user_id=user_id, 
-        action=f"User [{username}]: Bulk imported {added_count} items."
-    )
+    audit_log = models.ActivityLog(user_id=user_id, action=f"User [{username}]: Bulk imported {added_count} items.")
     db.add(audit_log)
     db.commit()
-    
     return {"status": "Success", "message": f"Successfully imported {added_count} items!"}
 
 @app.get("/inventory/audit-logs", tags=["Inventory"])
@@ -201,15 +241,22 @@ def get_recent_audit_logs(db: Session = Depends(get_db)):
 @app.delete("/inventory/{item_id}", tags=["Inventory"])
 def delete_inventory_item(item_id: int, db: Session = Depends(get_db)):
     db_item = db.query(models.Inventory).filter(models.Inventory.id == item_id).first()
-    if not db_item:
-        raise HTTPException(status_code=404, detail="Item not found")
+    if not db_item: raise HTTPException(status_code=404, detail="Item not found")
     db.delete(db_item)
     db.commit()
     return {"status": "success", "message": f"Item {item_id} deleted"}
 
-# --- MATERIAL TRANSFERS (The 3-Step Handshake) ---
+# --- ADDED: MATERIAL TRANSFERS (The 3-Step Handshake) ---
+class TransferCreate(BaseModel):
+    item_name: str
+    brand: str
+    quantity: float
+    unit: str
+    source_site_id: int
+    destination_site_id: int
+
 @app.post("/transfers/initiate", tags=["Transfers"])
-def initiate_transfer(req: schemas.TransferCreate, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+def initiate_transfer(req: TransferCreate, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username: str = payload.get("sub")
@@ -217,7 +264,6 @@ def initiate_transfer(req: schemas.TransferCreate, token: str = Depends(oauth2_s
     except jose.JWTError:
         raise HTTPException(status_code=401, detail="Invalid Session")
 
-    # 1. Deduct from Source Site
     source_item = db.query(models.Inventory).filter(
         models.Inventory.site_id == req.source_site_id,
         models.Inventory.item_name == req.item_name,
@@ -227,7 +273,6 @@ def initiate_transfer(req: schemas.TransferCreate, token: str = Depends(oauth2_s
     if not source_item or source_item.quantity < req.quantity:
         raise HTTPException(status_code=400, detail="Insufficient stock at source site to transfer.")
 
-    # Deduct quantity and auto-update status
     source_item.quantity -= req.quantity
     is_asset = source_item.unit in ["Unit", "Set"]
     
@@ -236,19 +281,14 @@ def initiate_transfer(req: schemas.TransferCreate, token: str = Depends(oauth2_s
     elif source_item.quantity <= 10 and not is_asset:
         source_item.status = "Low Stock"
 
-    # 2. Create the "In Transit" Ticket (The Void)
     new_transfer = models.MaterialTransfer(
-        item_name=req.item_name,
-        brand=req.brand,
-        quantity=req.quantity,
-        unit=req.unit,
-        source_site_id=req.source_site_id,
+        item_name=req.item_name, brand=req.brand, quantity=req.quantity,
+        unit=req.unit, source_site_id=req.source_site_id,
         destination_site_id=req.destination_site_id,
         status=models.TransferStatus.IN_TRANSIT.value
     )
     db.add(new_transfer)
 
-    # 3. Write to Audit Trail
     audit_log = models.ActivityLog(
         user_id=user_id,
         action=f"User [{username}]: Dispatched {req.quantity} {req.unit} of {req.item_name} from Site ID {req.source_site_id} to Site ID {req.destination_site_id}."
@@ -258,9 +298,8 @@ def initiate_transfer(req: schemas.TransferCreate, token: str = Depends(oauth2_s
     db.commit()
     return {"status": "Success", "message": "Transfer initiated successfully."}
 
-@app.get("/transfers/incoming/{site_id}", response_model=List[schemas.TransferResponse], tags=["Transfers"])
+@app.get("/transfers/incoming/{site_id}", tags=["Transfers"])
 def get_incoming_transfers(site_id: int, db: Session = Depends(get_db)):
-    # Lets Site B check the void for incoming trucks
     return db.query(models.MaterialTransfer).filter(
         models.MaterialTransfer.destination_site_id == site_id,
         models.MaterialTransfer.status == models.TransferStatus.IN_TRANSIT.value
@@ -275,16 +314,13 @@ def receive_transfer(transfer_id: int, token: str = Depends(oauth2_scheme), db: 
     except jose.JWTError:
         raise HTTPException(status_code=401, detail="Invalid Session")
 
-    # 1. Find the exact Transfer Ticket
     transfer = db.query(models.MaterialTransfer).filter(models.MaterialTransfer.id == transfer_id).first()
     if not transfer or transfer.status != models.TransferStatus.IN_TRANSIT.value:
         raise HTTPException(status_code=404, detail="Active transfer not found.")
 
-    # 2. Mark as Received
     transfer.status = models.TransferStatus.RECEIVED.value
     transfer.received_at = datetime.datetime.utcnow()
 
-    # 3. Inject into Destination Inventory
     dest_item = db.query(models.Inventory).filter(
         models.Inventory.site_id == transfer.destination_site_id,
         models.Inventory.item_name == transfer.item_name,
@@ -298,17 +334,12 @@ def receive_transfer(transfer_id: int, token: str = Depends(oauth2_scheme), db: 
         dest_item.status = "Available" if is_asset else "Healthy"
     else:
         new_item = models.Inventory(
-            item_name=transfer.item_name,
-            brand=transfer.brand,
-            quantity=transfer.quantity,
-            unit=transfer.unit,
-            status="Available" if is_asset else "Healthy",
-            fsn_status="FAST",
-            site_id=transfer.destination_site_id
+            item_name=transfer.item_name, brand=transfer.brand, quantity=transfer.quantity,
+            unit=transfer.unit, status="Available" if is_asset else "Healthy",
+            fsn_status="FAST", site_id=transfer.destination_site_id
         )
         db.add(new_item)
 
-    # 4. Write to Audit Trail
     audit_log = models.ActivityLog(
         user_id=user_id,
         action=f"User [{username}]: Received {transfer.quantity} {transfer.unit} of {transfer.item_name} (Transfer ID: {transfer.id})."
@@ -326,13 +357,8 @@ def list_suppliers(db: Session = Depends(get_db)):
 @app.post("/suppliers/", response_model=schemas.SupplierResponse, tags=["Logistics"])
 def create_supplier(s: schemas.SupplierCreate, db: Session = Depends(get_db)):
     new_s = models.Supplier(
-        name=s.name, 
-        contact=s.contact, 
-        latitude=s.lat, 
-        longitude=s.lon, 
-        quality_rating=s.rating,
-        is_sister_company=False,
-        address=s.address
+        name=s.name, contact=s.contact, latitude=s.lat, longitude=s.lon, 
+        quality_rating=s.rating, is_sister_company=False, address=s.address
     )
     db.add(new_s)
     db.commit()
@@ -341,17 +367,10 @@ def create_supplier(s: schemas.SupplierCreate, db: Session = Depends(get_db)):
     if s.material:
         clean_price = 0.0
         if s.price:
-            try:
-                clean_price = float(str(s.price).replace("₱", "").replace(",", "").strip())
-            except:
-                pass 
+            try: clean_price = float(str(s.price).replace("₱", "").replace(",", "").strip())
+            except: pass 
                 
-        new_mat = models.SupplierMaterial(
-            supplier_id=new_s.id,
-            material_name=s.material,
-            price=clean_price,
-            stock_level=s.stockLevel
-        )
+        new_mat = models.SupplierMaterial(supplier_id=new_s.id, material_name=s.material, price=clean_price, stock_level=s.stockLevel)
         db.add(new_mat)
         db.commit()
         db.refresh(new_s) 
@@ -364,8 +383,7 @@ class RatingUpdate(BaseModel):
 @app.patch("/suppliers/{supplier_id}/rating", tags=["Logistics"])
 def update_supplier_rating(supplier_id: int, req: RatingUpdate, db: Session = Depends(get_db)):
     supplier = db.query(models.Supplier).filter(models.Supplier.id == supplier_id).first()
-    if not supplier:
-        raise HTTPException(status_code=404, detail="Supplier not found")
+    if not supplier: raise HTTPException(status_code=404, detail="Supplier not found")
     
     supplier.quality_rating = req.rating
     db.commit()
@@ -374,21 +392,17 @@ def update_supplier_rating(supplier_id: int, req: RatingUpdate, db: Session = De
 @app.delete("/suppliers/{supplier_id}", tags=["Logistics"])
 def delete_supplier(supplier_id: int, db: Session = Depends(get_db)):
     db_supplier = db.query(models.Supplier).filter(models.Supplier.id == supplier_id).first()
-    
-    if not db_supplier:
-        raise HTTPException(status_code=404, detail="Supplier not found")
+    if not db_supplier: raise HTTPException(status_code=404, detail="Supplier not found")
         
     db.delete(db_supplier)
     db.commit()
-    
     return {"status": "success", "message": f"Supplier {supplier_id} deleted"}
 
 # --- ADVISORY (DETERMINISTIC HEURISTIC INSTEAD OF AI) ---
 @app.get("/advisory/procure/{site_id}/{item_name}", tags=["Advisory"])
 def procure_advice(site_id: int, item_name: str, db: Session = Depends(get_db)):
     site = db.query(models.ProjectSite).filter(models.ProjectSite.id == site_id).first()
-    if not site:
-        raise HTTPException(status_code=404, detail="Site not found")
+    if not site: raise HTTPException(status_code=404, detail="Site not found")
         
     suppliers = db.query(models.Supplier).all()
     recommendations = []
@@ -398,16 +412,11 @@ def procure_advice(site_id: int, item_name: str, db: Session = Depends(get_db)):
         travel_time = get_real_travel_time(site.latitude, site.longitude, s.latitude, s.longitude)
         
         predicted_score = (s.quality_rating * 10) - (dist * 1.5)
-        if getattr(s, 'is_sister_company', False):
-            predicted_score += 15
+        if getattr(s, 'is_sister_company', False): predicted_score += 15
 
         recommendations.append({
-            "supplier": s.name,
-            "distance_km": round(dist, 2),
-            "travel_time_mins": travel_time,
-            "score": round(max(5, min(99, predicted_score)), 2),
-            "contact": s.contact,
-            "is_sister": getattr(s, 'is_sister_company', False)
+            "supplier": s.name, "distance_km": round(dist, 2), "travel_time_mins": travel_time,
+            "score": round(max(5, min(99, predicted_score)), 2), "contact": s.contact, "is_sister": getattr(s, 'is_sister_company', False)
         })
             
     return sorted(recommendations, key=lambda x: x['score'], reverse=True)
@@ -419,13 +428,11 @@ class ChatRequest(BaseModel):
 @app.post("/advisory/chat", tags=["Advisory"])
 def chat_with_ai(req: ChatRequest, db: Session = Depends(get_db)):
     supplier_count = db.query(models.Supplier).count()
-    
     simulated_response = (
         f"**System Acknowledged:** I received your query regarding '{req.message}'. "
         f"I am currently tracking {supplier_count} unlisted suppliers in the database. "
         "Once my API key is active, I will cross-reference this with live prices and proximity."
     )
-    
     return {"reply": simulated_response}
 
 @app.get("/")

@@ -1,10 +1,11 @@
 import { useLocation, Link, Outlet, useNavigate } from "react-router-dom";
 import { 
   LayoutDashboard, Boxes, BrainCircuit, Truck, Map as MapIcon, 
-  Settings, Bell, Search, User, Menu, Store, LogOut, ShoppingCart, Package
+  Settings, Bell, Search, User, Menu, Store, LogOut, Users,
+  ShoppingCart, Package // <-- RESTORED FOR OMNISEARCH
 } from "lucide-react";
 import { useState, useEffect } from "react";
-import { inventoryAPI, sitesAPI } from "../../services/apiService"; // <-- ADDED sitesAPI
+import { inventoryAPI, sitesAPI } from "../../services/apiService"; // <-- RESTORED SITES API
 
 // 1. THE VIP LIST: We added 'allowedRoles' to dictate who sees what.
 const navItems = [
@@ -15,6 +16,7 @@ const navItems = [
   // Restricted Routes below:
   { name: "Projects", path: "/projects", icon: MapIcon, allowedRoles: ["admin", "owner"] },
   { name: "Suppliers", path: "/suppliers", icon: Store, allowedRoles: ["admin", "owner"] },
+  { name: "Team Access", path: "/team", icon: Users, allowedRoles: ["admin", "owner"] },
 ];
 
 export function Layout() {
@@ -26,7 +28,7 @@ export function Layout() {
   const [userRole, setUserRole] = useState("staff"); 
   const [userName, setUserName] = useState("User");
 
-  // State for Live Logs & Omnisearch Data
+  // <-- RESTORED STATE FOR LIVE LOGS & OMNISEARCH -->
   const [recentLogs, setRecentLogs] = useState<any[]>([]);
   const [globalInventory, setGlobalInventory] = useState<any[]>([]);
   const [globalSites, setGlobalSites] = useState<any[]>([]);
@@ -84,7 +86,7 @@ export function Layout() {
     item.allowedRoles.includes(userRole)
   );
 
-  // 4. OMNISEARCH LOGIC
+  // 4. RESTORED OMNISEARCH LOGIC
   const searchResults = searchQuery.trim() === "" ? [] : globalInventory.filter(item => 
     item.item_name.toLowerCase().includes(searchQuery.toLowerCase()) || 
     item.brand.toLowerCase().includes(searchQuery.toLowerCase())
@@ -163,7 +165,7 @@ export function Layout() {
               <Menu className="w-5 h-5" />
             </button>
             
-            {/* --- OMNISEARCH BAR --- */}
+            {/* --- RESTORED OMNISEARCH BAR --- */}
             <div className="hidden md:flex items-center relative group">
               <Search className="w-4 h-4 absolute left-3 text-neutral-400" />
               <input 
@@ -183,7 +185,6 @@ export function Layout() {
                   
                   {searchResults.length > 0 ? (
                     searchResults.map(item => {
-                      // Find the site name based on the item's site_id
                       const site = globalSites.find(s => s.id === item.site_id);
                       
                       return (
@@ -210,12 +211,11 @@ export function Layout() {
                               </div>
                             </div>
                             
-                            {/* THE "OPTION TO BUY ANOTHER" BUTTON */}
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                setSearchQuery(""); // Close search
-                                navigate('/suppliers'); // Send them to buy more
+                                setSearchQuery(""); 
+                                navigate('/suppliers'); 
                               }}
                               className="p-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-600 hover:text-white transition-colors"
                               title="Procure More"

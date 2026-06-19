@@ -54,6 +54,7 @@ class SiteCreate(BaseModel):
     address: Optional[str] = None 
     lat: float
     lon: float
+    manager_id: Optional[int] = None # <--- ADDED: This fixes the 500 Server Error!
 
 class SiteProgressUpdate(BaseModel):
     stage_status: str
