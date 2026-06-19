@@ -3,7 +3,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
 # Ensure your password and DB name are correct here
-SQLALCHEMY_DATABASE_URL = "postgresql://postgres:S0ftandW3t@localhost:5432/mattrack_db"
+SQLALCHEMY_DATABASE_URL = "postgresql://postgres:admin@localhost:5432/mattrack_db"
 
 engine = create_engine(SQLALCHEMY_DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -17,3 +17,6 @@ def get_db():
         yield db
     finally:
         db.close()
+
+        
+        
