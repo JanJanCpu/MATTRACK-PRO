@@ -9,7 +9,8 @@ import {
   X,
   Download,
   ArrowRight,
-  BellRing // Added for the new Smart Alerts title
+  BellRing,
+  Star 
 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { useState, useEffect } from "react";
@@ -17,6 +18,9 @@ import { sitesAPI, inventoryAPI } from "../../services/apiService";
 import type { ProjectSite, Inventory } from "../../types";
 
 export function Dashboard() {
+  const [currentUserRole, setCurrentUserRole] = useState("staff");
+  const [currentUserId, setCurrentUserId] = useState<number | null>(null);
+
   const [sites, setSites] = useState<ProjectSite[]>([]);
   const [inventory, setInventory] = useState<Inventory[]>([]);
   const [loading, setLoading] = useState(true);
@@ -25,12 +29,23 @@ export function Dashboard() {
   
   const navigate = useNavigate();
 
-  // --- Modal State Variables ---
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedSiteId, setSelectedSiteId] = useState<number | null>(null);
   const [updateForm, setUpdateForm] = useState({ stage: "Pre-construction", progress: 0 });
 
-  // 1. LIVE POLLING
+  useEffect(() => {
+    const token = localStorage.getItem("token");
+    if (token) {
+      try {
+        const payload = JSON.parse(atob(token.split('.')[1]));
+        setCurrentUserRole(payload.role ? payload.role.toLowerCase() : "staff");
+        setCurrentUserId(payload.id);
+      } catch (e) {
+        console.error("Token parse error");
+      }
+    }
+  }, []);
+
   useEffect(() => {
     const fetchData = async (isInitialLoad = false) => {
       try {
@@ -86,11 +101,11 @@ export function Dashboard() {
     document.body.removeChild(link);
   };
 
-  // 2. REAL-TIME METRICS & ROUTING LOGIC
   const criticalShortages = inventory.filter((i) => i.status === "Critical");
   const surplusItems = inventory.filter((i) => i.status === "Surplus");
-  const inTransitCount = inventory.filter((i) => i.status === "In Transit").length;
+  const lowStockItems = inventory.filter((i) => i.status === "Low Stock");
 
+  // --- DASHBOARD ROUTING SHORTCUTS ---
   const metrics = [
     {
       label: "Active Project Sites",
@@ -98,7 +113,6 @@ export function Dashboard() {
       icon: Building2,
       color: "text-blue-600",
       bg: "bg-blue-100",
-      // Action drops them into the Projects Ledger
       action: () => navigate("/projects") 
     },
     {
@@ -107,17 +121,15 @@ export function Dashboard() {
       icon: AlertTriangle,
       color: "text-red-600",
       bg: "bg-red-100",
-      // Action drops them into Inventory WITH a hidden state filter
       action: () => navigate("/inventory", { state: { autoFilter: "Critical" } })
     },
     {
-      label: "Pending Deliveries",
-      value: inTransitCount.toString(),
-      icon: Truck,
+      label: "Low Stock Warnings",
+      value: lowStockItems.length.toString(),
+      icon: AlertTriangle,
       color: "text-amber-600",
       bg: "bg-amber-100",
-      // Action drops them into Inventory WITH a hidden state filter
-      action: () => navigate("/inventory", { state: { autoFilter: "In Transit" } })
+      action: () => navigate("/inventory", { state: { autoFilter: "Low Stock" } })
     },
     {
       label: "Available Surplus Items",
@@ -125,16 +137,15 @@ export function Dashboard() {
       icon: TrendingUp,
       color: "text-emerald-600",
       bg: "bg-emerald-100",
-      // Action drops them into Inventory WITH a hidden state filter
       action: () => navigate("/inventory", { state: { autoFilter: "Surplus" } })
     },
   ];
 
-  // 3. PROJECT MAPPING
   const projects = sites.map((site) => ({
     raw_id: site.id,
     id: `SITE-${site.id}`,
     name: site.site_name,
+    manager_id: site.manager_id,
     location: `${site.latitude.toFixed(2)}, ${site.longitude.toFixed(2)}`,
     status: inventory.some((i) => i.site_id === site.id && i.status === "Critical") ? "Critical" : "On Track",
     progress: site.progress_percentage || 0, 
@@ -142,7 +153,12 @@ export function Dashboard() {
     shortages: inventory.filter((i) => i.site_id === site.id && i.status === "Critical").length,
   }));
 
-  // 4. SMART PROCUREMENT ALERTS (Formerly Neural Net)
+  const sortedProjects = [...projects].sort((a, b) => {
+    const isMineA = a.manager_id === currentUserId ? 1 : 0;
+    const isMineB = b.manager_id === currentUserId ? 1 : 0;
+    return isMineB - isMineA; 
+  });
+
   const aiAdvisories = [];
 
   if (surplusItems.length > 0) {
@@ -183,14 +199,14 @@ export function Dashboard() {
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-neutral-900 flex items-center gap-3">
-            Multi-Project Ledger
+            Global Control Center
             <span className="flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 text-emerald-700 rounded-full text-[10px] font-black tracking-widest uppercase border border-emerald-200">
               <span className={`w-1.5 h-1.5 rounded-full bg-emerald-500 ${isSyncing ? 'animate-ping' : ''}`}></span>
               Live Sync
             </span>
           </h1>
           <p className="text-sm text-neutral-500 mt-1">
-            Real-time material tracking and procurement advisory for {sites.length} active sites.
+            Real-time material tracking and procurement advisory across all {sites.length} network sites.
           </p>
         </div>
         <div className="flex gap-3">
@@ -216,7 +232,6 @@ export function Dashboard() {
         </div>
       ) : (
         <>
-          {/* UPDATED: Metrics Grid (Now Clickable) */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             {metrics.map((m, idx) => {
               const Icon = m.icon;
@@ -248,7 +263,7 @@ export function Dashboard() {
             <div className="lg:col-span-2 bg-white border border-neutral-200 rounded-xl shadow-sm overflow-hidden flex flex-col">
               <div className="px-6 py-5 border-b flex items-center justify-between">
                 <h2 className="font-semibold text-neutral-900">
-                  Project Health Overview
+                  Network Health Overview
                 </h2>
                 <Link
                   to="/projects"
@@ -269,69 +284,83 @@ export function Dashboard() {
                     </tr>
                   </thead>
                   <tbody className="divide-y">
-                    {projects.map((p) => (
-                      <tr 
-                        key={p.id} 
-                        onClick={() => navigate(`/projects`)} 
-                        className="hover:bg-emerald-50/50 cursor-pointer group transition-colors border-b border-neutral-100 last:border-0"
-                      >
-                        <td className="px-6 py-4">
-                          <div className="font-bold text-neutral-900 group-hover:text-emerald-600 transition-colors">
-                            {p.name}
-                          </div>
-                          <div className="text-xs text-neutral-400 font-mono mt-0.5">
-                            {p.id}
-                          </div>
-                        </td>
-                        
-                        <td className="px-6 py-4 min-w-[150px]">
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="text-[10px] font-bold text-neutral-500 uppercase">{p.stage_status}</span>
-                            <span className="text-[10px] font-bold text-neutral-900">{p.progress}%</span>
-                          </div>
-                          <div className="w-full h-1.5 bg-neutral-200 rounded-full overflow-hidden">
-                            <div
-                              className={`h-full rounded-full transition-all duration-500 ${
-                                p.progress < 30 ? "bg-red-500" : 
-                                p.progress < 70 ? "bg-amber-500" : "bg-emerald-500"
-                              }`}
-                              style={{ width: `${p.progress}%` }}
-                            />
-                          </div>
-                        </td>
+                    {sortedProjects.map((p) => {
+                      const canEdit = currentUserRole !== "staff" || p.manager_id === currentUserId;
 
-                        <td className="px-6 py-4">
-                          <span
-                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${p.status === "Critical" ? "bg-red-100 text-red-700" : "bg-emerald-100 text-emerald-700"}`}
-                          >
-                            {p.status}
-                          </span>
-                        </td>
-                        <td className={`px-6 py-4 font-bold ${p.shortages > 0 ? "text-red-600" : "text-neutral-400"}`}>
-                          {p.shortages > 0 ? `${p.shortages} items` : "-"}
-                        </td>
+                      return (
+                        <tr 
+                          key={p.id} 
+                          onClick={() => navigate(`/projects`)} 
+                          className={`hover:bg-emerald-50/50 cursor-pointer group transition-colors border-b border-neutral-100 last:border-0 ${canEdit && currentUserRole === 'staff' ? 'bg-indigo-50/20' : ''}`}
+                        >
+                          <td className="px-6 py-4">
+                            <div className="font-bold text-neutral-900 group-hover:text-emerald-600 transition-colors flex items-center gap-2">
+                              {p.name}
+                              {canEdit && currentUserRole === "staff" && (
+                                <span className="px-1.5 py-0.5 bg-indigo-100 text-indigo-700 text-[9px] font-black tracking-widest uppercase rounded flex items-center gap-1">
+                                  <Star className="w-2.5 h-2.5 fill-indigo-700" /> Your Site
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-xs text-neutral-400 font-mono mt-0.5">
+                              {p.id}
+                            </div>
+                          </td>
+                          
+                          <td className="px-6 py-4 min-w-[150px]">
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="text-[10px] font-bold text-neutral-500 uppercase">{p.stage_status}</span>
+                              <span className="text-[10px] font-bold text-neutral-900">{p.progress}%</span>
+                            </div>
+                            <div className="w-full h-1.5 bg-neutral-200 rounded-full overflow-hidden">
+                              <div
+                                className={`h-full rounded-full transition-all duration-500 ${
+                                  p.progress < 30 ? "bg-red-500" : 
+                                  p.progress < 70 ? "bg-amber-500" : "bg-emerald-500"
+                                }`}
+                                style={{ width: `${p.progress}%` }}
+                              />
+                            </div>
+                          </td>
 
-                        <td className="px-6 py-4 text-right">
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation(); 
-                              setSelectedSiteId(p.raw_id);
-                              setUpdateForm({ stage: p.stage_status, progress: p.progress });
-                              setIsModalOpen(true);
-                            }}
-                            className="px-3 py-1.5 bg-blue-50 text-blue-600 hover:bg-blue-100 hover:text-blue-800 rounded-lg text-xs font-bold transition-colors"
-                          >
-                            Update
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                          <td className="px-6 py-4">
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${p.status === "Critical" ? "bg-red-100 text-red-700" : "bg-emerald-100 text-emerald-700"}`}
+                            >
+                              {p.status}
+                            </span>
+                          </td>
+                          <td className={`px-6 py-4 font-bold ${p.shortages > 0 ? "text-red-600" : "text-neutral-400"}`}>
+                            {p.shortages > 0 ? `${p.shortages} items` : "-"}
+                          </td>
+
+                          <td className="px-6 py-4 text-right">
+                            {canEdit ? (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation(); 
+                                  setSelectedSiteId(p.raw_id);
+                                  setUpdateForm({ stage: p.stage_status, progress: p.progress });
+                                  setIsModalOpen(true);
+                                }}
+                                className="px-3 py-1.5 bg-blue-50 text-blue-600 hover:bg-blue-100 hover:text-blue-800 rounded-lg text-xs font-bold transition-colors"
+                              >
+                                Update
+                              </button>
+                            ) : (
+                              <span className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider">
+                                View Only
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
             </div>
 
-            {/* UPDATED: Smart Procurement Alerts */}
             <div className="lg:col-span-1 bg-slate-900 rounded-xl shadow-lg text-white overflow-hidden flex flex-col border border-slate-800">
               <div className="p-6 border-b border-slate-800 flex items-center gap-2 bg-slate-900">
                 <BellRing className="w-5 h-5 text-emerald-400" />

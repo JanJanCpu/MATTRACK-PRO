@@ -15,13 +15,12 @@ class FSNStatus(str, enum.Enum):
     SLOW = "SLOW"
     NON_MOVING = "NON_MOVING"
 
-# --- NEW: Transfer Status ENUM ---
 class TransferStatus(str, enum.Enum):
     IN_TRANSIT = "IN_TRANSIT"
     RECEIVED = "RECEIVED"
     CANCELLED = "CANCELLED"
 
-# --- NEW: RBAC User Table ---
+# --- RBAC User Table ---
 class User(Base):
     __tablename__ = "users"
     __table_args__ = {'extend_existing': True}
@@ -32,15 +31,31 @@ class User(Base):
     hashed_password = Column(String(255), nullable=False)
     role = Column(String(20), default=UserRole.STAFF.value, nullable=False)
     
-    # Owner profile details
     company_name = Column(String(100), nullable=True)
     company_address = Column(Text, nullable=True)
     company_contact = Column(String(50), nullable=True)
     company_website = Column(String(100), nullable=True)
 
     logs = relationship("ActivityLog", back_populates="user")
+    notifications = relationship("Notification", back_populates="user")
+    sessions = relationship("ActiveSession", back_populates="user", cascade="all, delete-orphan")
 
-# --- NEW: Audit Trail Ledger ---
+# --- ISO 27001 Active Session Tracker ---
+class ActiveSession(Base):
+    __tablename__ = "active_sessions"
+    __table_args__ = {'extend_existing': True}
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    token = Column(String(500), unique=True, index=True, nullable=False)
+    device_info = Column(String(255), default="Unknown Device")
+    ip_address = Column(String(50), default="Unknown IP")
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    last_active = Column(DateTime, default=datetime.datetime.utcnow)
+
+    user = relationship("User", back_populates="sessions")
+
+# --- Audit Trail Ledger ---
 class ActivityLog(Base):
     __tablename__ = "activity_logs"
     __table_args__ = {'extend_existing': True}
@@ -49,10 +64,11 @@ class ActivityLog(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     action = Column(String(255), nullable=False) 
     timestamp = Column(DateTime, default=datetime.datetime.utcnow)
+    is_security_event = Column(Boolean, default=False) 
 
     user = relationship("User", back_populates="logs")
 
-# --- MERGED: Project Sites ---
+# --- Project Sites ---
 class ProjectSite(Base):
     __tablename__ = "project_sites"
     __table_args__ = {'extend_existing': True} 
@@ -67,14 +83,13 @@ class ProjectSite(Base):
     progress_percentage = Column(Integer, default=0) 
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     
-    # --- ADDED: RBAC MULTI-TENANCY LINK FROM CLASSMATE ---
     manager_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     manager = relationship("User")
     
     inventory = relationship("Inventory", back_populates="site")
     requests = relationship("MaterialRequest", back_populates="site")
 
-# --- MERGED: Inventory (With FSN & Brand) ---
+# --- Inventory ---
 class Inventory(Base):
     __tablename__ = "inventory"
     __table_args__ = {'extend_existing': True}
@@ -92,7 +107,7 @@ class Inventory(Base):
     
     site = relationship("ProjectSite", back_populates="inventory")
 
-# --- EXISTING: Suppliers ---
+# --- Suppliers ---
 class Supplier(Base):
     __tablename__ = "suppliers"
     __table_args__ = {'extend_existing': True}
@@ -109,7 +124,7 @@ class Supplier(Base):
 
     materials = relationship("SupplierMaterial", back_populates="supplier", cascade="all, delete-orphan")
 
-# --- EXISTING: Relational Sub-Table for Inventory ---
+# --- Supplier Catalog ---
 class SupplierMaterial(Base):
     __tablename__ = "supplier_materials"
     __table_args__ = {'extend_existing': True}
@@ -117,12 +132,14 @@ class SupplierMaterial(Base):
     id = Column(Integer, primary_key=True, index=True)
     supplier_id = Column(Integer, ForeignKey("suppliers.id", ondelete="CASCADE"))
     material_name = Column(String, index=True)
-    price = Column(Float)
-    stock_level = Column(String) 
+    price = Column(Float, default=0.0)
+    stock_level = Column(String, default="Unknown") 
+    
+    delivery_rating = Column(Float, default=0.0) 
 
     supplier = relationship("Supplier", back_populates="materials")
 
-# --- EXISTING: Material Requests ---
+# --- Material Requests ---
 class MaterialRequest(Base):
     __tablename__ = "material_requests"
     __table_args__ = {'extend_existing': True}
@@ -135,7 +152,7 @@ class MaterialRequest(Base):
     
     site = relationship("ProjectSite", back_populates="requests")
 
-# --- NEW: Digital Material Transfer Ticket (The Handshake) ---
+# --- Material Transfers ---
 class MaterialTransfer(Base):
     __tablename__ = "material_transfers"
     __table_args__ = {'extend_existing': True}
@@ -155,3 +172,18 @@ class MaterialTransfer(Base):
 
     source_site = relationship("ProjectSite", foreign_keys=[source_site_id])
     destination_site = relationship("ProjectSite", foreign_keys=[destination_site_id])
+
+# --- User Notifications ---
+class Notification(Base):
+    __tablename__ = "notifications"
+    __table_args__ = {'extend_existing': True}
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    title = Column(String(100), nullable=False)
+    message = Column(Text, nullable=False)
+    link = Column(String(255), nullable=True) 
+    is_read = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    user = relationship("User", back_populates="notifications")

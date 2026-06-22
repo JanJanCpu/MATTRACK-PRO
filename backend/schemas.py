@@ -7,7 +7,7 @@ class MessageResponse(BaseModel):
     status: str
     message: str
 
-# --- AUTH & USERS (NEW) ---
+# --- AUTH & USERS ---
 class UserBase(BaseModel):
     username: str
     email: EmailStr
@@ -31,11 +31,41 @@ class Token(BaseModel):
     access_token: str
     token_type: str
 
+class PasswordUpdate(BaseModel):
+    current_password: str
+    new_password: str
+
+class SessionResponse(BaseModel):
+    id: int
+    device_info: str
+    ip_address: str
+    created_at: str
+    last_active: str
+    is_current_session: bool = False 
+
+    class Config:
+        from_attributes = True
+
+# --- ACTIVITY LOGS ---
 class ActivityLogResponse(BaseModel):
     id: int
     user_id: int
     action: str
-    timestamp: datetime
+    timestamp: str 
+    is_security_event: bool = False 
+
+    class Config:
+        from_attributes = True
+
+# --- NOTIFICATIONS ---
+class NotificationResponse(BaseModel):
+    id: int
+    user_id: int
+    title: str
+    message: str
+    link: Optional[str] = None 
+    is_read: bool
+    created_at: str 
 
     class Config:
         from_attributes = True
@@ -54,7 +84,7 @@ class SiteCreate(BaseModel):
     address: Optional[str] = None 
     lat: float
     lon: float
-    manager_id: Optional[int] = None # <--- ADDED: This fixes the 500 Server Error!
+    manager_id: Optional[int] = None 
 
 class SiteProgressUpdate(BaseModel):
     stage_status: str
@@ -68,6 +98,7 @@ class SiteResponse(BaseModel):
     longitude: float
     stage_status: Optional[str] = None 
     progress_percentage: int = 0 
+    manager_id: Optional[int] = None 
 
     class Config:
         from_attributes = True
@@ -81,13 +112,16 @@ class InventoryBase(BaseModel):
     status: str
     fsn_status: str = "FAST"
     site_id: int
+    
+    supplier_id: Optional[int] = None
+    batch_rating: Optional[float] = None
 
 class InventoryCreate(InventoryBase):
     pass
 
 class InventoryResponse(InventoryBase):
     id: int
-    updated_at: datetime
+    updated_at: datetime 
     
     class Config:
         from_attributes = True
@@ -97,6 +131,7 @@ class SupplierMaterialBase(BaseModel):
     material_name: str
     price: float
     stock_level: str
+    delivery_rating: float = 0.0 
 
 class SupplierMaterialCreate(BaseModel):
     material_name: str
@@ -159,7 +194,7 @@ class RequestResponse(RequestCreate):
     class Config:
         from_attributes = True
 
-# --- MATERIAL TRANSFERS (NEW) ---
+# --- MATERIAL TRANSFERS ---
 class TransferCreate(BaseModel):
     source_site_id: int
     destination_site_id: int

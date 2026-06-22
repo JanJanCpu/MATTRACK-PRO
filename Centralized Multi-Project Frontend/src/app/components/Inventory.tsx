@@ -10,12 +10,16 @@ import {
   ListChecks,
   X,
   History,
-  Filter
+  Filter,
+  Lock,
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  Send
 } from "lucide-react";
 import React, { useState, useEffect } from "react";
 import { useNavigate, useLocation } from "react-router-dom"; 
-import { inventoryAPI, sitesAPI } from "../../services/apiService";
-import type { Inventory as InventoryItem, ProjectSite } from "../../types";
+import { inventoryAPI, sitesAPI, suppliersAPI, transferAPI } from "../../services/apiService"; 
+import type { Inventory as InventoryItem, ProjectSite, Supplier } from "../../types"; 
 import { BulkImportWizard } from "./BulkImportWizard";
 
 interface InventoryWithCategory extends InventoryItem {
@@ -27,24 +31,38 @@ export function Inventory() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  // --- Master Tabs & Filters ---
+  const [currentUserRole, setCurrentUserRole] = useState("staff");
+  const [currentUserId, setCurrentUserId] = useState<number | null>(null);
+
   const [activeTab, setActiveTab] = useState<"inventory" | "audit">("inventory");
-  const [filter, setFilter] = useState(location.state?.autoFilter || "All"); 
+  
+  const [statusFilter, setStatusFilter] = useState("All"); 
+  const [siteFilter, setSiteFilter] = useState<number | null>(null);
+  const [pivotSiteName, setPivotSiteName] = useState("");
 
   const [inventoryData, setInventoryData] = useState<InventoryWithCategory[]>([]);
   const [sitesList, setSitesList] = useState<ProjectSite[]>([]);
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
+  const [suppliersList, setSuppliersList] = useState<Supplier[]>([]); 
+
   const [loading, setLoading] = useState(true);
-  
   const [showAddForm, setShowAddForm] = useState(false);
   const [showBulkWizard, setShowBulkWizard] = useState(false); 
   const [error, setError] = useState<string | null>(null);
 
-  // Bulk Delete Mode
   const [isDeleteMode, setIsDeleteMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
 
-  // Strict Form Logic
+  // Transaction Modal State
+  const [modalType, setModalType] = useState<"IN" | "OUT" | "TRANSFER" | null>(null);
+  const [activeTransactionItem, setActiveTransactionItem] = useState<InventoryWithCategory | null>(null);
+  const [transactionForm, setTransactionForm] = useState({
+    quantity: 0,
+    destination_site_id: "",
+    supplier_id: "",
+    batch_rating: 0
+  });
+
   const [itemType, setItemType] = useState<"consumable" | "asset">("consumable");
   const [newItem, setNewItem] = useState({
     item_name: "",
@@ -55,6 +73,37 @@ export function Inventory() {
     fsn_status: "FAST", 
     site_id: "",
   });
+
+  // --- NEW: THE ROUTING LISTENER ---
+  // This catches clicks from the Dashboard and auto-filters the table!
+  useEffect(() => {
+    if (location.state?.autoFilter) {
+      setStatusFilter(location.state.autoFilter);
+    }
+    if (location.state?.autoPivotSiteId) {
+      setSiteFilter(location.state.autoPivotSiteId);
+      setPivotSiteName(location.state.siteName || "");
+      setNewItem(prev => ({ ...prev, site_id: location.state.autoPivotSiteId }));
+    }
+    
+    // Clear the router state so it doesn't get stuck if the user refreshes
+    if (location.state) {
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+  }, [location.state, navigate, location.pathname]);
+
+  useEffect(() => {
+    const token = localStorage.getItem("token");
+    if (token) {
+      try {
+        const payload = JSON.parse(atob(token.split('.')[1]));
+        setCurrentUserRole(payload.role ? payload.role.toLowerCase() : "staff");
+        setCurrentUserId(payload.id);
+      } catch (e) {
+        console.error("Token parse error");
+      }
+    }
+  }, []);
 
   useEffect(() => {
     if (itemType === "consumable") {
@@ -67,14 +116,16 @@ export function Inventory() {
   const fetchData = async () => {
     try {
       setLoading(true);
-      const [inventoryList, sites, logs] = await Promise.all([
+      const [inventoryList, sites, logs, suppliers] = await Promise.all([
         inventoryAPI.list(),
         sitesAPI.list(),
-        inventoryAPI.getLogs() 
+        inventoryAPI.getLogs(),
+        suppliersAPI.list() 
       ]);
 
       setSitesList(sites);
       setAuditLogs(logs); 
+      setSuppliersList(suppliers); 
 
       const siteMap = new Map(sites.map((s) => [s.id, s.site_name]));
 
@@ -90,7 +141,6 @@ export function Inventory() {
       })) as InventoryWithCategory[];
 
       setInventoryData(categorized);
-      
       setSelectedIds([]); 
       setIsDeleteMode(false);
     } catch (err) {
@@ -118,10 +168,87 @@ export function Inventory() {
       });
 
       setShowAddForm(false);
-      setNewItem({ item_name: "", brand: "Generic/No Brand", quantity: 0, unit: "Bags", status: "Healthy", fsn_status: "FAST", site_id: "" });
-      fetchData();
+setNewItem({ item_name: "", brand: "Generic/No Brand", quantity: 0, unit: "Bags", status: "Healthy", fsn_status: "FAST", site_id: siteFilter ? String(siteFilter) : "" });      fetchData();
+      
+      window.dispatchEvent(new Event("inventoryUpdated"));
     } catch (err) {
       alert("Failed to add item to the ledger.");
+    }
+  };
+
+  const handleTransactionSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeTransactionItem || !modalType) return;
+    if (transactionForm.quantity <= 0) return alert("Quantity must be greater than 0");
+
+    if (modalType === "IN" && transactionForm.supplier_id && transactionForm.batch_rating === 0) {
+        return alert("Please provide a star rating for this delivery batch.");
+    }
+
+    if (modalType === "TRANSFER") {
+        if (!transactionForm.destination_site_id) return alert("Select a destination site.");
+        if (activeTransactionItem.quantity < transactionForm.quantity) {
+            return alert("Not enough stock to transfer.");
+        }
+        
+        try {
+            await transferAPI.initiate({
+                source_site_id: activeTransactionItem.site_id,
+                destination_site_id: Number(transactionForm.destination_site_id),
+                item_name: activeTransactionItem.item_name,
+                brand: activeTransactionItem.brand,
+                quantity: transactionForm.quantity,
+                unit: activeTransactionItem.unit
+            });
+            setModalType(null);
+            fetchData();
+            window.dispatchEvent(new Event("inventoryUpdated"));
+            alert("Transfer dispatched successfully! It is now IN TRANSIT.");
+        } catch (err) {
+            alert("Failed to initiate transfer.");
+        }
+        return; 
+    }
+
+    let finalQuantity = transactionForm.quantity;
+    let finalStatus = "Healthy";
+    const isAsset = activeTransactionItem.unit === "Unit" || activeTransactionItem.unit === "Set";
+
+    if (modalType === "OUT") {
+      if (activeTransactionItem.quantity < transactionForm.quantity) return alert(`Not enough stock! You only have ${activeTransactionItem.quantity} ${activeTransactionItem.unit}.`);
+      
+      finalQuantity = -Math.abs(transactionForm.quantity);
+      const stockAfterDeduction = activeTransactionItem.quantity - transactionForm.quantity;
+      
+      if (isAsset) {
+          finalStatus = stockAfterDeduction === 0 ? "In Use" : "Available";
+      } else {
+          if (stockAfterDeduction === 0) finalStatus = "Critical";
+          else if (stockAfterDeduction <= 10) finalStatus = "Low Stock";
+          else finalStatus = "Healthy";
+      }
+    } else {
+      finalStatus = isAsset ? "Available" : "Healthy";
+    }
+
+    try {
+      await inventoryAPI.logTransaction({
+        item_name: activeTransactionItem.item_name,
+        brand: activeTransactionItem.brand,
+        quantity: finalQuantity,
+        unit: activeTransactionItem.unit,
+        status: finalStatus,
+        fsn_status: "FAST", 
+        site_id: activeTransactionItem.site_id,
+        supplier_id: transactionForm.supplier_id ? Number(transactionForm.supplier_id) : undefined,
+        batch_rating: transactionForm.batch_rating > 0 ? transactionForm.batch_rating : undefined
+      });
+
+      setModalType(null);
+      fetchData();
+      window.dispatchEvent(new Event("inventoryUpdated"));
+    } catch (err) {
+      alert("Transaction failed. Check connection.");
     }
   };
 
@@ -130,8 +257,9 @@ export function Inventory() {
     try {
       await inventoryAPI.delete(id);
       fetchData(); 
+      window.dispatchEvent(new Event("inventoryUpdated"));
     } catch (err) {
-      alert("Failed to delete item.");
+      alert("Failed to delete item. You may not have clearance for this site.");
     }
   };
 
@@ -140,8 +268,9 @@ export function Inventory() {
     try {
       await Promise.all(selectedIds.map(id => inventoryAPI.delete(id)));
       fetchData(); 
+      window.dispatchEvent(new Event("inventoryUpdated"));
     } catch (err) {
-      alert("An error occurred while deleting some items. Please check the console.");
+      alert("An error occurred while deleting some items. You may not have clearance for all selected sites.");
       fetchData();
     }
   };
@@ -157,45 +286,45 @@ export function Inventory() {
     link.click();
   };
 
-  // --- SMART SORT ENGINE ---
-  
-  // 1. Filter Logic
-  const rawFilteredData = filter === "All" 
-    ? inventoryData 
-    : inventoryData.filter((i) => i.status === filter);
+  // --- THE MASTER INVENTORY SMART SORT ALGORITHM ---
+  let processedData = inventoryData;
+  if (siteFilter) {
+    processedData = processedData.filter(i => i.site_id === siteFilter);
+  }
+  if (statusFilter !== "All") {
+    processedData = processedData.filter(i => i.status === statusFilter);
+  }
 
-  // 2. Assign Priority Weights
+  // Weight logic guarantees Critical and Low Stock automatically bubble to the top of the ledger.
   const getStatusWeight = (status: string) => {
     switch(status) {
-      case "Critical": 
-      case "Maintenance": 
-        return 1; // Top priority
-      case "Low Stock": 
-        return 2;
-      case "Healthy": 
-      case "Available": 
-        return 3;
-      case "In Use": 
-        return 4;
-      case "Surplus": 
-        return 5; // Lowest priority
-      default: 
-        return 99;
+      case "Critical": case "Maintenance": return 1; 
+      case "Low Stock": return 2;
+      case "Healthy": case "Available": return 3;
+      case "In Use": return 4;
+      case "Surplus": return 5; 
+      default: return 99;
     }
   };
 
-  // 3. Apply the Sort
-  const sortedData = [...rawFilteredData].sort((a, b) => getStatusWeight(a.status) - getStatusWeight(b.status));
+  const sortedData = [...processedData].sort((a, b) => getStatusWeight(a.status) - getStatusWeight(b.status));
 
   const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
-    e.target.checked ? setSelectedIds(sortedData.map((item) => item.id)) : setSelectedIds([]);
+    if (e.target.checked) {
+      const editableIds = sortedData.filter(item => {
+        const site = sitesList.find(s => s.id === item.site_id);
+        return currentUserRole !== "staff" || (site && site.manager_id === currentUserId);
+      }).map(item => item.id);
+      setSelectedIds(editableIds);
+    } else {
+      setSelectedIds([]);
+    }
   };
 
   const handleSelectItem = (id: number) => {
     setSelectedIds((prev) => prev.includes(id) ? prev.filter((itemId) => itemId !== id) : [...prev, id]);
   };
 
-  // Status Badge Color Logic
   const getStatusColor = (status: string) => {
     switch(status) {
       case "Critical": case "Maintenance": return "bg-red-100 text-red-700 border-red-200";
@@ -207,14 +336,15 @@ export function Inventory() {
     }
   };
 
+  const editableSites = sitesList.filter(s => currentUserRole !== "staff" || s.manager_id === currentUserId);
+
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
       
-      {/* HEADER & MASTER TABS */}
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 border-b border-neutral-200 pb-4">
         <div>
-          <h1 className="text-2xl font-bold text-neutral-900">Inventory & Ledger</h1>
-          <p className="text-sm text-neutral-500 mt-1">Manage global stock and track system audit logs.</p>
+          <h1 className="text-2xl font-bold text-neutral-900">Global Inventory Ledger</h1>
+          <p className="text-sm text-neutral-500 mt-1">Global visibility enabled. You can only modify data for sites you manage.</p>
           
           <div className="flex bg-neutral-100 p-1 rounded-lg w-fit mt-4">
             <button 
@@ -232,7 +362,6 @@ export function Inventory() {
           </div>
         </div>
         
-        {/* ACTION BUTTONS */}
         {activeTab === "inventory" && (
           <div className="flex flex-wrap gap-2">
             {isDeleteMode ? (
@@ -264,10 +393,27 @@ export function Inventory() {
         )}
       </div>
 
-      {/* --- INVENTORY TAB CONTENT --- */}
       {activeTab === "inventory" && (
         <>
-          {showBulkWizard && <BulkImportWizard sitesList={sitesList} onComplete={() => { setShowBulkWizard(false); fetchData(); }} onCancel={() => setShowBulkWizard(false)} />}
+          {/* THE PARAMETRIC PIVOT BANNER */}
+          {siteFilter && (
+            <div className="bg-indigo-50 border border-indigo-200 p-4 rounded-xl flex items-center justify-between animate-in fade-in">
+              <div className="flex items-center gap-2 text-indigo-800 font-medium text-sm">
+                <Filter className="w-4 h-4" /> Filtered to Project Site: <strong className="font-black">{pivotSiteName || `SITE-${siteFilter}`}</strong>
+              </div>
+              <button 
+                onClick={() => {
+                  setSiteFilter(null);
+                  navigate('.', { replace: true, state: {} }); // Clear state
+                }}
+                className="px-3 py-1 bg-white border border-indigo-200 text-indigo-600 hover:bg-indigo-100 rounded text-xs font-bold transition-colors"
+              >
+                Clear Filter (View Global)
+              </button>
+            </div>
+          )}
+
+          {showBulkWizard && <BulkImportWizard sitesList={editableSites} suppliersList={suppliersList} onComplete={() => { setShowBulkWizard(false); fetchData(); window.dispatchEvent(new Event("inventoryUpdated")); }} onCancel={() => setShowBulkWizard(false)} />}
 
           {showAddForm && (
             <div className="bg-white p-6 rounded-xl border border-emerald-200 shadow-sm animate-in slide-in-from-top-4">
@@ -284,8 +430,8 @@ export function Inventory() {
                 <div>
                   <label className="block text-xs font-bold text-neutral-500 mb-1">Project Site</label>
                   <select className="w-full p-2 border rounded-lg text-sm bg-white focus:ring-2 focus:ring-emerald-500 outline-none" value={newItem.site_id} onChange={(e) => setNewItem({ ...newItem, site_id: e.target.value })} required>
-                    <option value="">Select Site...</option>
-                    {sitesList.map((s) => <option key={s.id} value={s.id}>{s.site_name}</option>)}
+                    <option value="">Select Managed Site...</option>
+                    {editableSites.map((s) => <option key={s.id} value={s.id}>{s.site_name}</option>)}
                   </select>
                 </div>
                 <div>
@@ -347,7 +493,6 @@ export function Inventory() {
             </div>
           )}
 
-          {/* Quick Filters */}
           <div className="flex gap-2 mb-4 overflow-x-auto pb-2">
             <div className="flex items-center gap-2 px-3 py-1 bg-neutral-200/50 rounded-full text-xs font-bold text-neutral-500 mr-2">
               <Filter className="w-3 h-3" /> Filters
@@ -355,8 +500,8 @@ export function Inventory() {
             {["All", "Critical", "Low Stock", "Healthy", "Surplus", "Available", "In Use"].map(f => (
               <button 
                 key={f}
-                onClick={() => setFilter(f)}
-                className={`px-4 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-colors ${filter === f ? "bg-slate-800 text-white shadow-md" : "bg-white border border-neutral-200 text-neutral-600 hover:bg-neutral-50"}`}
+                onClick={() => setStatusFilter(f)}
+                className={`px-4 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-colors ${statusFilter === f ? "bg-slate-800 text-white shadow-md" : "bg-white border border-neutral-200 text-neutral-600 hover:bg-neutral-50"}`}
               >
                 {f}
               </button>
@@ -370,7 +515,7 @@ export function Inventory() {
                   <tr>
                     {isDeleteMode && (
                       <th className="px-5 py-3 font-medium w-12 text-center">
-                        <input type="checkbox" className="w-4 h-4 rounded border-gray-300 text-red-600 cursor-pointer" onChange={handleSelectAll} checked={sortedData.length > 0 && selectedIds.length === sortedData.length}/>
+                        <input type="checkbox" className="w-4 h-4 rounded border-gray-300 text-red-600 cursor-pointer" onChange={handleSelectAll} checked={sortedData.length > 0 && selectedIds.length === sortedData.filter(i => currentUserRole !== "staff" || sitesList.find(s => s.id === i.site_id)?.manager_id === currentUserId).length}/>
                       </th>
                     )}
                     <th className="px-5 py-3 font-medium">Item & Brand</th>
@@ -383,46 +528,64 @@ export function Inventory() {
                 </thead>
                 <tbody className="divide-y divide-neutral-100">
                   {sortedData.length > 0 ? (
-                    sortedData.map((item) => (
-                      <tr key={item.id} className={`hover:bg-neutral-50/50 transition-colors ${selectedIds.includes(item.id) ? "bg-red-50/30" : ""}`}>
-                        {isDeleteMode && (
-                          <td className="px-5 py-4 text-center">
-                            <input type="checkbox" className="w-4 h-4 rounded border-gray-300 text-red-600 cursor-pointer" checked={selectedIds.includes(item.id)} onChange={() => handleSelectItem(item.id)}/>
+                    sortedData.map((item) => {
+                      const itemSite = sitesList.find(s => s.id === item.site_id);
+                      const canEdit = currentUserRole !== "staff" || (itemSite && itemSite.manager_id === currentUserId);
+
+                      return (
+                        <tr key={item.id} className={`hover:bg-neutral-50/50 transition-colors ${selectedIds.includes(item.id) ? "bg-red-50/30" : ""} ${!canEdit && isDeleteMode ? "opacity-50 bg-neutral-50" : ""}`}>
+                          {isDeleteMode && (
+                            <td className="px-5 py-4 text-center">
+                              {canEdit ? (
+                                <input type="checkbox" className="w-4 h-4 rounded border-gray-300 text-red-600 cursor-pointer" checked={selectedIds.includes(item.id)} onChange={() => handleSelectItem(item.id)}/>
+                              ) : (
+                                <Lock className="w-4 h-4 text-neutral-300 mx-auto" />
+                              )}
+                            </td>
+                          )}
+                          <td className="px-5 py-4 text-neutral-900">
+                            <div className="font-bold text-sm">{item.item_name}</div>
+                            <div className="text-xs text-neutral-500">{item.brand}</div>
                           </td>
-                        )}
-                        <td className="px-5 py-4 text-neutral-900">
-                          <div className="font-bold text-sm">{item.item_name}</div>
-                          <div className="text-xs text-neutral-500">{item.brand}</div>
-                        </td>
-                        <td className="px-5 py-4 text-neutral-600">{item.siteName}</td>
-                        <td className="px-5 py-4 text-right font-medium">
-                          <div className="flex items-center justify-end gap-2">
-                            {(item.status === "Critical" || item.status === "Low Stock") && (
-                              <AlertTriangle className="w-4 h-4 text-amber-500 animate-pulse" />
-                            )}
-                            <span className="text-base">{item.quantity} <span className="text-neutral-400 font-normal text-xs">{item.unit}</span></span>
-                          </div>
-                        </td>
-                        <td className="px-5 py-4 text-center">
-                          <span className="text-[10px] font-black text-neutral-400 bg-neutral-100 px-2 py-1 rounded">{item.fsn_status}</span>
-                        </td>
-                        <td className="px-5 py-4 text-center">
-                          <span className={`inline-flex px-2.5 py-1 rounded border text-[10px] font-bold uppercase tracking-wider ${getStatusColor(item.status)}`}>
-                            {item.status}
-                          </span>
-                        </td>
-                        <td className="px-5 py-4 text-right">
-                          <div className="flex justify-end gap-1">
-                            <button onClick={() => navigate('/advisory', { state: { autoPromptItem: item } })} className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors flex items-center gap-1 text-xs font-bold" title="Ask AI to source this item" disabled={isDeleteMode}>
-                              <Sparkles className="w-4 h-4" />
-                            </button>
-                            <button onClick={() => handleDelete(item.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Delete Item">
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))
+                          <td className="px-5 py-4 text-neutral-600">{item.siteName}</td>
+                          <td className="px-5 py-4 text-right font-medium">
+                            <div className="flex items-center justify-end gap-2">
+                              {(item.status === "Critical" || item.status === "Low Stock") && (
+                                <AlertTriangle className="w-4 h-4 text-amber-500 animate-pulse" />
+                              )}
+                              <span className="text-base">{item.quantity} <span className="text-neutral-400 font-normal text-xs">{item.unit}</span></span>
+                            </div>
+                          </td>
+                          <td className="px-5 py-4 text-center">
+                            <span className="text-[10px] font-black text-neutral-400 bg-neutral-100 px-2 py-1 rounded">{item.fsn_status}</span>
+                          </td>
+                          <td className="px-5 py-4 text-center">
+                            <span className={`inline-flex px-2.5 py-1 rounded border text-[10px] font-bold uppercase tracking-wider ${getStatusColor(item.status)}`}>
+                              {item.status}
+                            </span>
+                          </td>
+                          <td className="px-5 py-4 text-right">
+                            <div className="flex justify-end gap-1">
+                              <button onClick={() => navigate('/advisory', { state: { autoPromptItem: item } })} className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors flex items-center gap-1 text-xs font-bold" title="Ask AI to source this item" disabled={isDeleteMode}>
+                                <Sparkles className="w-4 h-4" />
+                              </button>
+                              
+                              {canEdit ? (
+                                <>
+                                  <button onClick={() => { setActiveTransactionItem(item); setModalType("IN"); }} className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors" title="Log Delivery (In)"><ArrowDownToLine className="w-4 h-4" /></button>
+                                  <button onClick={() => { setActiveTransactionItem(item); setModalType("OUT"); }} className="p-2 text-slate-700 hover:bg-slate-100 rounded-lg transition-colors" title="Log Usage (Out)"><ArrowUpFromLine className="w-4 h-4" /></button>
+                                  <button onClick={() => { setActiveTransactionItem(item); setModalType("TRANSFER"); }} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Transfer to Site"><Send className="w-4 h-4" /></button>
+                                </>
+                              ) : (
+                                <button disabled className="p-2 text-neutral-300 rounded-lg cursor-not-allowed" title="Read Only (Managed by another site)">
+                                  <Lock className="w-4 h-4" />
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
                   ) : (
                     <tr>
                       <td colSpan={isDeleteMode ? 8 : 7} className="px-5 py-12 text-center text-neutral-500 bg-neutral-50/50">
@@ -437,7 +600,7 @@ export function Inventory() {
         </>
       )}
 
-      {/* --- AUDIT TRAIL TAB CONTENT --- */}
+      {/* Audit Tab Logic Remains Identical */}
       {activeTab === "audit" && (
         <div className="bg-white border border-neutral-200 rounded-xl shadow-sm overflow-hidden animate-in slide-in-from-bottom-4">
           <div className="px-6 py-5 border-b border-neutral-200 bg-slate-900 flex items-center gap-3">
@@ -470,6 +633,75 @@ export function Inventory() {
         </div>
       )}
 
+      {/* Transaction Modal */}
+      {modalType && activeTransactionItem && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden">
+            <div className={`p-4 border-b flex justify-between items-center 
+              ${modalType === "IN" ? "bg-emerald-50 border-emerald-100 text-emerald-900" : 
+                modalType === "OUT" ? "bg-slate-900 border-slate-800 text-white" : 
+                "bg-blue-50 border-blue-100 text-blue-900"}`
+            }>
+              <h2 className="text-lg font-bold flex items-center gap-2">
+                {modalType === "IN" && <><ArrowDownToLine className="w-5 h-5"/> Log Delivery</>}
+                {modalType === "OUT" && <><ArrowUpFromLine className="w-5 h-5"/> Log Usage</>}
+                {modalType === "TRANSFER" && <><Send className="w-5 h-5"/> Dispatch Transfer</>}
+              </h2>
+              <button onClick={() => setModalType(null)} className="p-1 hover:bg-black/10 rounded-md transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <form onSubmit={handleTransactionSubmit} className="p-6 space-y-5">
+              <div className="bg-neutral-50 p-3 rounded-lg border border-neutral-200">
+                <p className="text-xs text-neutral-500 font-bold uppercase mb-1">Target Item</p>
+                <p className="font-bold text-neutral-900">{activeTransactionItem.item_name} <span className="text-neutral-500 font-normal">({activeTransactionItem.brand})</span></p>
+                <p className="text-xs text-neutral-500 mt-1">Current Stock: {activeTransactionItem.quantity} {activeTransactionItem.unit}</p>
+              </div>
+
+              {modalType === "TRANSFER" && (
+                <div>
+                  <label className="block text-xs font-bold text-neutral-500 uppercase mb-2 text-blue-600">Destination Project Site</label>
+                  <select 
+                    required
+                    value={transactionForm.destination_site_id}
+                    onChange={(e) => setTransactionForm({ ...transactionForm, destination_site_id: e.target.value })}
+                    className="w-full p-3 border border-blue-200 bg-blue-50 rounded-lg text-sm font-medium focus:ring-2 focus:ring-blue-500 outline-none"
+                  >
+                    <option value="">Select Receiving Site...</option>
+                    {sitesList.filter(s => s.id !== activeTransactionItem.site_id).map(site => (
+                      <option key={site.id} value={site.id}>{site.site_name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-bold text-neutral-500 uppercase mb-2">Quantity {modalType === "IN" ? "Received" : modalType === "TRANSFER" ? "To Transfer" : "Used"}</label>
+                <div className="flex items-center gap-3">
+                  <input 
+                    type="number" required min="1" max={modalType !== "IN" ? activeTransactionItem.quantity : undefined}
+                    value={transactionForm.quantity || ""}
+                    onChange={(e) => setTransactionForm({ ...transactionForm, quantity: Number(e.target.value) })}
+                    className="w-full p-3 border border-neutral-300 rounded-lg text-lg font-bold text-center focus:ring-2 focus:ring-emerald-500 outline-none"
+                  />
+                  <span className="font-bold text-neutral-500 bg-neutral-100 px-4 py-3 rounded-lg border border-neutral-200">{activeTransactionItem.unit}</span>
+                </div>
+              </div>
+
+              <div className="pt-2">
+                <button type="submit" className={`w-full py-3 rounded-lg text-sm font-bold transition-colors text-white 
+                  ${modalType === "IN" ? "bg-emerald-600 hover:bg-emerald-700" : 
+                    modalType === "OUT" ? "bg-slate-900 hover:bg-slate-800" : 
+                    "bg-blue-600 hover:bg-blue-700"}`
+                }>
+                  {modalType === "TRANSFER" ? "Dispatch Truck" : `Confirm ${modalType === "IN" ? "Delivery" : "Usage"}`}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

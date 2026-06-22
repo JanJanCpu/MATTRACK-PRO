@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Store, MapPin, Star, Plus, Phone, CheckCircle2, Trash2, Building2, Search, Loader } from "lucide-react";
+import { Store, MapPin, Star, Plus, Phone, CheckCircle2, Trash2, Building2, Search, Loader, ShieldAlert } from "lucide-react";
 import { MapContainer, TileLayer, Marker, useMapEvents, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -32,6 +32,9 @@ export function Suppliers() {
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [ratingEditId, setRatingEditId] = useState<number | null>(null);
+  
+  // --- NEW: RBAC State ---
+  const [userRole, setUserRole] = useState("staff");
 
   // Map & Form State
   const [formData, setFormData] = useState({ name: "", contact: "", address: "", rating: 3 }); // Set default rating as number 3
@@ -50,9 +53,20 @@ export function Suppliers() {
     }
   };
 
-  useEffect(() => { loadSuppliers(); }, []);
+  useEffect(() => { 
+    // Grab the role from the JWT to hide the Delete/Add buttons for PMs
+    const token = localStorage.getItem("token");
+    if (token) {
+        try {
+            const payload = JSON.parse(atob(token.split('.')[1]));
+            setUserRole(payload.role ? payload.role.toLowerCase() : "staff");
+        } catch (e) {
+            console.error("Token parse error");
+        }
+    }
+    loadSuppliers(); 
+  }, []);
 
-  // NEW: Smart Address Geocoding
   const handleAddressSearch = async (e: React.MouseEvent) => {
     e.preventDefault();
     if (!formData.address.trim()) return;
@@ -70,7 +84,6 @@ export function Suppliers() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      // FIXED: Sending the exact structure expected by the API service
       await suppliersAPI.create({
         name: formData.name, 
         contact: formData.contact, 
@@ -124,12 +137,15 @@ export function Suppliers() {
           <h1 className="text-2xl font-bold text-neutral-900">Crowdsourced Suppliers</h1>
           <p className="text-sm text-neutral-500 mt-1">Manage unlisted local hardware stores and material catalogs.</p>
         </div>
-        <button onClick={() => setShowForm(!showForm)} className="px-4 py-2 bg-slate-900 text-white rounded-lg font-medium flex items-center gap-2 hover:bg-slate-800 transition-all shadow-sm">
-          {showForm ? "Cancel" : <><Plus className="w-4 h-4" /> Add Supplier</>}
-        </button>
+        {/* --- FIXED: Hide the Add Button if User is Staff --- */}
+        {["admin", "owner"].includes(userRole) && (
+            <button onClick={() => setShowForm(!showForm)} className="px-4 py-2 bg-slate-900 text-white rounded-lg font-medium flex items-center gap-2 hover:bg-slate-800 transition-all shadow-sm">
+            {showForm ? "Cancel" : <><Plus className="w-4 h-4" /> Add Supplier</>}
+            </button>
+        )}
       </div>
 
-      {showForm && (
+      {showForm && ["admin", "owner"].includes(userRole) && (
         <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm animate-in slide-in-from-top-4">
           <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
             <div className="md:col-span-2">
@@ -141,7 +157,6 @@ export function Suppliers() {
               <input required value={formData.contact} onChange={(e) => setFormData({ ...formData, contact: e.target.value })} className="w-full p-2 border rounded-lg text-sm bg-neutral-50 focus:ring-2 focus:ring-slate-900 outline-none" placeholder="e.g. 0917-123-4567" />
             </div>
             
-            {/* The Smart Geocoding Input */}
             <div className="md:col-span-4">
               <label className="block text-xs font-bold text-neutral-500 uppercase mb-1">Store Address</label>
               <div className="flex gap-2">
@@ -152,7 +167,6 @@ export function Suppliers() {
               </div>
             </div>
 
-            {/* The Interactive Leaflet Map */}
             <div className="md:col-span-4 mb-2">
               <div className="flex items-center justify-between mb-1">
                 <label className="block text-xs font-bold text-neutral-500 uppercase">Location Preview</label>
@@ -177,6 +191,14 @@ export function Suppliers() {
         </div>
       )}
 
+      {/* --- FIXED: Staff Read-Only Notice --- */}
+      {userRole === "staff" && (
+          <div className="bg-blue-50 border border-blue-200 text-blue-800 p-4 rounded-xl flex items-center gap-3 text-sm">
+              <ShieldAlert className="w-5 h-5 text-blue-600 shrink-0" />
+              <p><strong>Procurement View Only:</strong> You are viewing the authorized supplier network. If you need to add a new unlisted vendor to the database, please contact the Pentabuild System Administrator.</p>
+          </div>
+      )}
+
       <div className="bg-white border border-neutral-200 rounded-xl shadow-sm overflow-hidden">
         <table className="w-full text-left text-sm whitespace-nowrap">
           <thead className="bg-neutral-50 text-neutral-500 border-b border-neutral-200">
@@ -184,7 +206,8 @@ export function Suppliers() {
               <th className="px-5 py-4 font-medium">Store & Contact</th>
               <th className="px-5 py-4 font-medium">Location</th>
               <th className="px-5 py-4 font-medium text-center">Quality Rating</th>
-              <th className="px-5 py-4 font-medium text-right">Actions</th>
+              {/* Hide the Action Column Header if they are staff */}
+              {["admin", "owner"].includes(userRole) && <th className="px-5 py-4 font-medium text-right">Actions</th>}
             </tr>
           </thead>
           <tbody className="divide-y divide-neutral-100">
@@ -215,7 +238,8 @@ export function Suppliers() {
                       </div>
                     </td>
                     <td className="px-5 py-4 text-center">
-                      {ratingEditId === sup.id ? (
+                      {/* Hide the Rating Edit logic if they are staff */}
+                      {ratingEditId === sup.id && ["admin", "owner"].includes(userRole) ? (
                         <div className="flex items-center justify-center gap-1">
                           {[1, 2, 3, 4, 5].map((num) => (
                             <button key={num} onClick={() => handleUpdateRating(sup.id, num)} className="p-1 hover:bg-amber-100 text-amber-500 rounded transition-colors">
@@ -224,23 +248,31 @@ export function Suppliers() {
                           ))}
                         </div>
                       ) : (
-                        <button onClick={() => setRatingEditId(sup.id)} className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-full font-bold text-xs transition-colors hover:opacity-80 ${sup.quality_rating === 3 ? "bg-slate-100 text-slate-600" : "bg-emerald-50 text-emerald-700"}`}>
+                        <button 
+                            disabled={userRole === "staff"}
+                            onClick={() => setRatingEditId(sup.id)} 
+                            className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-full font-bold text-xs transition-colors ${userRole === "staff" ? "cursor-default" : "hover:opacity-80"} ${sup.quality_rating === 3 ? "bg-slate-100 text-slate-600" : "bg-emerald-50 text-emerald-700"}`}
+                        >
                           {sup.quality_rating === 3 && <span className="mr-1">Unverified</span>}
                           {sup.quality_rating > 3 && <CheckCircle2 className="w-3 h-3" />}
                           {sup.quality_rating}.0 <Star className="w-3 h-3" fill="currentColor" />
                         </button>
                       )}
                     </td>
-                    <td className="px-5 py-4 text-right">
-                      <button onClick={() => handleDelete(sup.id, sup.name)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </td>
+                    
+                    {/* --- FIXED: Hide the Delete Trash Can if they are Staff --- */}
+                    {["admin", "owner"].includes(userRole) && (
+                        <td className="px-5 py-4 text-right">
+                        <button onClick={() => handleDelete(sup.id, sup.name)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
+                            <Trash2 className="w-4 h-4" />
+                        </button>
+                        </td>
+                    )}
                   </tr>
                 );
               })
             ) : (
-              <tr><td colSpan={4} className="p-12 text-center text-neutral-400">No crowdsourced suppliers found. Add one above.</td></tr>
+              <tr><td colSpan={4} className="p-12 text-center text-neutral-400">No crowdsourced suppliers found.</td></tr>
             )}
           </tbody>
         </table>

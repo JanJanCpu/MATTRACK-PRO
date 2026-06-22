@@ -1,4 +1,3 @@
-import { API_ENDPOINTS } from '../config';
 import type {
   ProjectSite,
   Inventory,
@@ -8,16 +7,15 @@ import type {
   ProcurementAdvice,
 } from '../types';
 
-// Fallback base URL for the new endpoints if they aren't in config yet
-const BASE_URL = "http://localhost:8000";
+// AUTOMATIC NETWORK ROUTING: 
+// This automatically uses 'localhost' when on your PC, and your IP Address when on your phone!
+const BASE_URL = `http://${window.location.hostname}:8000`;
 
-// Error handling & Security wrapper
 async function fetchAPI<T>(
-  url: string,
+  endpoint: string, 
   options?: RequestInit
 ): Promise<T> {
   try {
-    // --- CRITICAL RBAC FIX: Grab the JWT token from localStorage ---
     const token = localStorage.getItem("token") || localStorage.getItem("access_token");
     
     const headers: Record<string, string> = {
@@ -25,18 +23,18 @@ async function fetchAPI<T>(
       ...((options?.headers as Record<string, string>) || {}),
     };
 
-    // Inject the security token into the headers so FastAPI lets us in!
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    const response = await fetch(url, {
+    const response = await fetch(endpoint, {
       ...options,
       headers,
     });
 
     if (!response.ok) {
-      throw new Error(`API Error: ${response.status} ${response.statusText}`);
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.detail || `API Error: ${response.status} ${response.statusText}`);
     }
 
     return await response.json();
@@ -67,7 +65,7 @@ export const authAPI = {
   },
 
   register: (userData: { username: string; email: string; password: string; role: string; company_name?: string }) => 
-    fetchAPI<any>("/register", {
+    fetchAPI<any>(`${BASE_URL}/register`, {
       method: "POST",
       body: JSON.stringify(userData),
     }),
@@ -77,18 +75,17 @@ export const authAPI = {
   }
 };
 
-// Site APIs
+// --- 1. SITE APIs ---
 export const sitesAPI = {
   create: (siteData: { name: string; address?: string; lat: number; lon: number; manager_id: number }) =>
-    fetchAPI<ProjectSite>(API_ENDPOINTS.SITES_CREATE, {
+    fetchAPI<ProjectSite>(`${BASE_URL}/sites/`, { 
       method: 'POST',
       body: JSON.stringify(siteData),
     }),
 
   list: () =>
-    fetchAPI<ProjectSite[]>(API_ENDPOINTS.SITES_LIST),
+    fetchAPI<ProjectSite[]>(`${BASE_URL}/sites/`), 
 
-  // FIXED: Added ${BASE_URL} so it hits the backend on port 8000
   updateProgress: (id: number, stage_status: string, progress_percentage: number) =>
     fetchAPI<ProjectSite>(`${BASE_URL}/sites/${id}/progress`, {
       method: "PATCH",
@@ -96,21 +93,20 @@ export const sitesAPI = {
     }),
 };
 
-// Inventory APIs
+// --- 2. INVENTORY APIs ---
 export const inventoryAPI = {
   create: (item: Omit<Inventory, 'id'>) =>
-    fetchAPI<Inventory>(API_ENDPOINTS.INVENTORY_CREATE, {
+    fetchAPI<Inventory>(`${BASE_URL}/inventory/`, { 
       method: 'POST',
       body: JSON.stringify(item),
     }),
 
   list: () =>
-    fetchAPI<Inventory[]>(API_ENDPOINTS.INVENTORY_LIST),
+    fetchAPI<Inventory[]>(`${BASE_URL}/inventory/`), 
 
   grouped: () =>
-    fetchAPI<InventoryGrouped>(API_ENDPOINTS.INVENTORY_GROUPED),
+    fetchAPI<InventoryGrouped>(`${BASE_URL}/inventory/grouped`),
 
-  // Log Delivery / Usage
   logTransaction: (data: any) =>
     fetchAPI(`${BASE_URL}/inventory/log`, {
       method: 'POST',
@@ -126,13 +122,13 @@ export const inventoryAPI = {
     }),
 
   bulkUploadMapped: async (mappedItems: any[]) =>
-    fetchAPI<any>("/inventory/bulk-upload", {
+    fetchAPI<any>(`${BASE_URL}/inventory/bulk-upload`, {
       method: "POST",
       body: JSON.stringify(mappedItems),
     }),
 };
 
-// --- NEW: Material Transfer APIs (The 3-Step Handshake) ---
+// --- 3. MATERIAL TRANSFER APIs ---
 export const transferAPI = {
   initiate: (data: { source_site_id: number; destination_site_id: number; item_name: string; brand: string; quantity: number; unit: string; }) =>
     fetchAPI(`${BASE_URL}/transfers/initiate`, {
@@ -149,10 +145,10 @@ export const transferAPI = {
     }),
 };
 
-// Supplier APIs
+// --- 4. SUPPLIER APIs ---
 export const suppliersAPI = {
   create: (data: any) =>
-    fetchAPI<Supplier>(API_ENDPOINTS.SUPPLIERS_CREATE, {
+    fetchAPI<Supplier>(`${BASE_URL}/suppliers/`, { 
       method: 'POST',
       body: JSON.stringify({
         ...data,
@@ -161,7 +157,7 @@ export const suppliersAPI = {
     }),
 
   list: () =>
-    fetchAPI<Supplier[]>(API_ENDPOINTS.SUPPLIERS_LIST),
+    fetchAPI<Supplier[]>(`${BASE_URL}/suppliers/`), 
 
   updateRating: (id: number, rating: number) =>
     fetchAPI<any>(`${BASE_URL}/suppliers/${id}/rating`, { 
@@ -175,36 +171,34 @@ export const suppliersAPI = {
     }),
 };
 
-// Advisory APIs
+// --- 5. ADVISORY APIs ---
 export const advisoryAPI = {
   procure: (site_id: number, item_name: string) =>
-    fetchAPI<ProcurementAdvice[]>(
-      API_ENDPOINTS.ADVISORY_PROCURE(site_id, item_name)
-    ),
+    fetchAPI<ProcurementAdvice[]>(`${BASE_URL}/advisory/procure/${site_id}/${item_name}`),
 
   askAI: (message: string, context?: any) =>
-    fetchAPI<any>("/advisory/chat", {
+    fetchAPI<any>(`${BASE_URL}/advisory/chat`, {
       method: "POST",
       body: JSON.stringify({ message, context }),
     }),
 };
 
-// Material Request APIs
+// --- 6. MATERIAL REQUEST APIs ---
 export const requestsAPI = {
   create: (item: Omit<MaterialRequest, 'id'>) =>
-    fetchAPI<MaterialRequest>(API_ENDPOINTS.REQUESTS_CREATE, {
+    fetchAPI<MaterialRequest>(`${BASE_URL}/requests/`, {
       method: 'POST',
       body: JSON.stringify(item),
     }),
 
   list: () =>
-    fetchAPI<MaterialRequest[]>(API_ENDPOINTS.REQUESTS_LIST),
+    fetchAPI<MaterialRequest[]>(`${BASE_URL}/requests/`),
 };
 
-// Health check
+// --- 7. SYSTEM APIs ---
 export const systemAPI = {
   healthCheck: () =>
-    fetchAPI(API_ENDPOINTS.HEALTH_CHECK),
+    fetchAPI(`${BASE_URL}/`),
 };
 
 // --- SMART GEOCODING HELPER ---
@@ -230,16 +224,11 @@ export const geocodeAddress = async (addressText: string): Promise<{lat: number,
     while (parts.length > 1 && attempts < 3) {
       parts.shift(); 
       const fallbackAddress = parts.join(', ');
-      
-      console.log(`Fallback attempt ${attempts + 1}: ${fallbackAddress}`);
       await new Promise(r => setTimeout(r, 500));
-      
       result = await tryFetch(fallbackAddress);
       if (result) return result;
-      
       attempts++;
     }
-
     return null;
   } catch (error) {
     console.error("Geocoding failed:", error);
@@ -247,7 +236,7 @@ export const geocodeAddress = async (addressText: string): Promise<{lat: number,
   }
 };
 
-// --- NEW: User & Team Management APIs ---
+// --- 8. USER & TEAM MANAGEMENT APIs ---
 export const usersAPI = {
   create: (userData: any) =>
     fetchAPI(`${BASE_URL}/register`, {
@@ -257,4 +246,40 @@ export const usersAPI = {
 
   getStaff: () =>
     fetchAPI<any[]>(`${BASE_URL}/users/managers`),
+};
+
+// --- 9. NOTIFICATIONS API ---
+export const notificationsAPI = {
+  listUnread: () =>
+    fetchAPI<any[]>(`${BASE_URL}/notifications`),
+
+  markAsRead: (id: number) =>
+    fetchAPI(`${BASE_URL}/notifications/${id}/read`, {
+      method: 'PATCH',
+    }),
+
+  markAllAsRead: () =>
+    fetchAPI(`${BASE_URL}/notifications/read-all`, {
+      method: 'PATCH',
+    }),
+};
+
+// --- 10. SECURITY & SETTINGS API ---
+export const securityAPI = {
+  updatePassword: (data: any) =>
+    fetchAPI(`${BASE_URL}/users/password`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+
+  getSessions: () =>
+    fetchAPI<any[]>(`${BASE_URL}/users/sessions`),
+
+  revokeOtherSessions: () =>
+    fetchAPI(`${BASE_URL}/users/sessions`, {
+      method: 'DELETE',
+    }),
+
+  getSecurityLogs: () =>
+    fetchAPI<any[]>(`${BASE_URL}/users/security-logs`),
 };

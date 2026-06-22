@@ -2,10 +2,12 @@
 export interface ProjectSite {
   id: number;
   site_name: string;
+  address?: string;             // <-- ADDED to match backend
   latitude: number;
   longitude: number;
   stage_status?: string;        // <-- ADDED to match backend
   progress_percentage: number;  // <-- ADDED to match backend
+  manager_id?: number;          // <-- ADDED: Fixes the TypeScript error!
 }
 
 export interface Inventory {

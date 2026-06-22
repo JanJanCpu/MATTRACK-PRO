@@ -86,9 +86,10 @@ export const router = createBrowserRouter([
         ) 
       },
       { 
+        // FIXED: PMs (staff) now have access to the Suppliers page to buy materials
         path: "suppliers", 
         element: (
-          <RoleProtectedRoute allowedRoles={["admin", "owner"]}>
+          <RoleProtectedRoute allowedRoles={["admin", "owner", "staff"]}>
             <Suppliers />
           </RoleProtectedRoute>
         ) 

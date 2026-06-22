@@ -2,20 +2,18 @@ import { useLocation, Link, Outlet, useNavigate } from "react-router-dom";
 import { 
   LayoutDashboard, Boxes, BrainCircuit, Truck, Map as MapIcon, 
   Settings, Bell, Search, User, Menu, Store, LogOut, Users,
-  ShoppingCart, Package // <-- RESTORED FOR OMNISEARCH
+  ShoppingCart, Package, MapPin
 } from "lucide-react";
 import { useState, useEffect } from "react";
-import { inventoryAPI, sitesAPI } from "../../services/apiService"; // <-- RESTORED SITES API
+import { inventoryAPI, sitesAPI, notificationsAPI } from "../../services/apiService"; 
 
-// 1. THE VIP LIST: We added 'allowedRoles' to dictate who sees what.
 const navItems = [
   { name: "Dashboard", path: "/", icon: LayoutDashboard, allowedRoles: ["admin", "owner", "staff"] },
   { name: "Inventory & FSN", path: "/inventory", icon: Boxes, allowedRoles: ["admin", "owner", "staff"] },
   { name: "AI Advisory", path: "/advisory", icon: BrainCircuit, allowedRoles: ["admin", "owner", "staff"] },
   { name: "Logistics", path: "/logistics", icon: Truck, allowedRoles: ["admin", "owner", "staff"] },
-  // Restricted Routes below:
   { name: "Projects", path: "/projects", icon: MapIcon, allowedRoles: ["admin", "owner"] },
-  { name: "Suppliers", path: "/suppliers", icon: Store, allowedRoles: ["admin", "owner"] },
+  { name: "Suppliers", path: "/suppliers", icon: Store, allowedRoles: ["admin", "owner", "staff"] }, 
   { name: "Team Access", path: "/team", icon: Users, allowedRoles: ["admin", "owner"] },
 ];
 
@@ -24,56 +22,70 @@ export function Layout() {
   const [showNotifications, setShowNotifications] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   
-  // State for our RBAC logic
   const [userRole, setUserRole] = useState("staff"); 
   const [userName, setUserName] = useState("User");
+  
+  const [pmSiteName, setPmSiteName] = useState<string | null>(null);
 
-  // <-- RESTORED STATE FOR LIVE LOGS & OMNISEARCH -->
-  const [recentLogs, setRecentLogs] = useState<any[]>([]);
+  const [notifications, setNotifications] = useState<any[]>([]);
+  
   const [globalInventory, setGlobalInventory] = useState<any[]>([]);
   const [globalSites, setGlobalSites] = useState<any[]>([]);
   
   const location = useLocation();
   const navigate = useNavigate();
 
-  // 2. THE CHECKPOST & DATA SYNC
   useEffect(() => {
-    // Auth Check
+    let currentUserId: number | null = null;
+    let currentUserRole = "staff";
+
     const token = localStorage.getItem("token");
     if (token) {
       try {
         const payload = JSON.parse(atob(token.split('.')[1]));
-        setUserRole(payload.role ? payload.role.toLowerCase() : "staff");
+        currentUserRole = payload.role ? payload.role.toLowerCase() : "staff";
+        setUserRole(currentUserRole);
         setUserName(payload.sub || "User");
+        currentUserId = payload.id; 
       } catch (e) {
         console.error("Token parse error");
       }
     }
 
-    // Fetch Logs & Search Data
     const fetchBackgroundData = async () => {
       try {
-        const [logs, invData, sitesData] = await Promise.all([
-          inventoryAPI.getLogs(),
+        const [notifs, invData, sitesData] = await Promise.all([
+          notificationsAPI.listUnread(), 
           inventoryAPI.list(),
           sitesAPI.list()
         ]);
-        setRecentLogs(logs);
+        
+        setNotifications(notifs);
         setGlobalInventory(invData);
         setGlobalSites(sitesData);
+
+        if (currentUserRole === "staff" && currentUserId) {
+            const assignedSite = sitesData.find(site => site.manager_id === currentUserId);
+            if (assignedSite) {
+                setPmSiteName(assignedSite.site_name);
+            } else {
+                setPmSiteName("Unassigned User");
+            }
+        }
       } catch (err) {
         console.error("Failed to load background data:", err);
       }
     };
 
-    fetchBackgroundData(); // Fetch immediately
+    fetchBackgroundData(); 
+    
+    window.addEventListener("inventoryUpdated", fetchBackgroundData);
 
-    // Poll for fresh logs and inventory every 10 seconds
-    const interval = setInterval(() => {
-      fetchBackgroundData();
-    }, 10000);
-
-    return () => clearInterval(interval);
+    const interval = setInterval(() => fetchBackgroundData(), 10000);
+    return () => {
+        clearInterval(interval);
+        window.removeEventListener("inventoryUpdated", fetchBackgroundData);
+    };
   }, []);
 
   const handleLogout = () => {
@@ -81,20 +93,47 @@ export function Layout() {
     navigate("/login");
   };
 
-  // 3. THE SHAPE-SHIFTER
-  const filteredNavItems = navItems.filter(item => 
-    item.allowedRoles.includes(userRole)
-  );
+  const handleNotificationClick = async (e: React.MouseEvent, id: number, link?: string, isRead?: boolean) => {
+      e.stopPropagation(); 
+      try {
+          if (!isRead) {
+              await notificationsAPI.markAsRead(id);
+              setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n));
+          }
+          
+          if (link) {
+              setShowNotifications(false); 
+              if (location.pathname !== link) {
+                  navigate(link); 
+              }
+          }
+      } catch (err) {
+          console.error("Failed to mark notification as read");
+      }
+  };
 
-  // 4. RESTORED OMNISEARCH LOGIC
+  // --- NEW: Mark all as read instantly ---
+  const handleMarkAllAsRead = async (e: React.MouseEvent) => {
+      e.stopPropagation();
+      try {
+          await notificationsAPI.markAllAsRead();
+          setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
+      } catch (err) {
+          console.error("Failed to mark all as read");
+      }
+  };
+
+  const filteredNavItems = navItems.filter(item => item.allowedRoles.includes(userRole));
+
   const searchResults = searchQuery.trim() === "" ? [] : globalInventory.filter(item => 
     item.item_name.toLowerCase().includes(searchQuery.toLowerCase()) || 
     item.brand.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  const unreadCount = notifications.filter(n => !n.is_read).length;
+
   return (
     <div className="flex h-screen bg-neutral-50 overflow-hidden font-sans text-neutral-900">
-      {/* Sidebar */}
       <aside className={`
         fixed inset-y-0 left-0 z-50 w-64 bg-slate-900 text-white transition-transform duration-300 ease-in-out
         md:relative md:translate-x-0 flex flex-col
@@ -156,16 +195,13 @@ export function Layout() {
         </div>
       </aside>
 
-      {/* Main Content */}
       <main className="flex-1 flex flex-col min-w-0 overflow-hidden relative">
-        {/* Header */}
         <header className="flex items-center justify-between h-16 px-4 md:px-8 bg-white border-b border-neutral-200 shrink-0 relative z-40">
           <div className="flex items-center gap-4">
             <button className="md:hidden p-2 text-neutral-600 hover:bg-neutral-100 rounded-md" onClick={() => setSidebarOpen(true)}>
               <Menu className="w-5 h-5" />
             </button>
             
-            {/* --- RESTORED OMNISEARCH BAR --- */}
             <div className="hidden md:flex items-center relative group">
               <Search className="w-4 h-4 absolute left-3 text-neutral-400" />
               <input 
@@ -176,7 +212,6 @@ export function Layout() {
                 className="pl-9 pr-4 py-2 w-[400px] text-sm bg-neutral-100 border border-transparent rounded-full focus:bg-white focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 transition-all outline-none"
               />
               
-              {/* OMNISEARCH DROPDOWN RESULTS */}
               {searchQuery && (
                 <div className="absolute top-full left-0 mt-2 w-[500px] bg-white border border-neutral-200 rounded-xl shadow-2xl py-2 max-h-[450px] overflow-y-auto z-50">
                   <div className="px-4 py-2 text-[10px] font-bold text-neutral-400 uppercase tracking-wider border-b border-neutral-100">
@@ -243,36 +278,71 @@ export function Layout() {
           </div>
 
           <div className="flex items-center gap-4">
-            {/* LIVE NOTIFICATIONS DROPDOWN */}
-            <div className="relative">
+            
+            <div className="hidden lg:flex items-center gap-2 px-3 py-1.5 bg-slate-100 border border-slate-200 rounded-full text-xs font-bold text-slate-700">
+                {userRole === "staff" && pmSiteName ? (
+                    <>
+                        <MapPin className="w-3.5 h-3.5 text-emerald-600" />
+                        Operating Context: <span className="text-emerald-700">{pmSiteName}</span>
+                    </>
+                ) : (
+                    <>
+                        <LayoutDashboard className="w-3.5 h-3.5 text-blue-600" />
+                        Operating Context: <span className="text-blue-700">Global Admin View</span>
+                    </>
+                )}
+            </div>
+
+            <div className="relative border-l border-neutral-200 pl-4 ml-2">
               <button 
                 onClick={() => setShowNotifications(!showNotifications)}
                 className="relative p-2 text-neutral-500 hover:bg-neutral-100 rounded-full transition-colors"
               >
                 <Bell className="w-5 h-5" />
-                {recentLogs.length > 0 && (
-                  <span className="absolute top-1.5 right-1.5 w-2.5 h-2.5 bg-red-500 border-2 border-white rounded-full"></span>
+                {unreadCount > 0 && (
+                  <span className="absolute top-0 right-0 w-4 h-4 bg-red-500 text-white text-[9px] font-bold flex items-center justify-center border-2 border-white rounded-full">
+                    {unreadCount > 9 ? '9+' : unreadCount}
+                  </span>
                 )}
               </button>
               
               {showNotifications && (
                 <div className="absolute right-0 mt-2 w-80 bg-white border border-neutral-200 rounded-xl shadow-lg overflow-hidden z-50">
                   <div className="px-4 py-3 bg-neutral-50 border-b border-neutral-200 font-bold text-sm text-neutral-900 flex justify-between items-center">
-                    System Audit Alerts
-                    <span className="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">{recentLogs.length} New</span>
+                    <span>Your Notifications</span>
+                    {unreadCount > 0 && (
+                        <button 
+                          onClick={handleMarkAllAsRead} 
+                          className="text-[10px] text-emerald-600 hover:text-emerald-800 hover:underline"
+                        >
+                          Mark all as read
+                        </button>
+                    )}
                   </div>
                   
                   <div className="max-h-80 overflow-y-auto">
-                    {recentLogs.length > 0 ? (
-                      recentLogs.map((log, idx) => (
-                        <div key={idx} className="p-4 border-b border-neutral-100 hover:bg-neutral-50 transition-colors cursor-pointer">
-                          <div className="text-sm font-bold text-emerald-600 mb-1">Inventory Updated</div>
-                          <div className="text-xs text-neutral-600 leading-relaxed">{log.action}</div>
-                          <div className="text-[10px] text-neutral-400 mt-2 font-mono">Timestamp: {log.timestamp}</div>
+                    {notifications.length > 0 ? (
+                      notifications.map((notif) => (
+                        <div 
+                          key={notif.id} 
+                          onClick={(e) => handleNotificationClick(e, notif.id, notif.link, notif.is_read)}
+                          className={`p-4 border-b border-neutral-100 transition-colors cursor-pointer flex items-start gap-3
+                            ${!notif.is_read ? 'bg-emerald-50/30 hover:bg-emerald-50' : 'hover:bg-neutral-50 opacity-60'}
+                          `}
+                        >
+                          {!notif.is_read && <div className="w-2 h-2 rounded-full bg-emerald-500 mt-1.5 shrink-0"></div>}
+                          <div>
+                            <div className={`text-sm font-bold ${!notif.is_read ? 'text-emerald-700' : 'text-neutral-600'} mb-1`}>{notif.title}</div>
+                            <div className="text-xs text-neutral-600 leading-relaxed">{notif.message}</div>
+                            <div className="text-[10px] text-neutral-400 mt-2 font-mono">Timestamp: {notif.created_at}</div>
+                          </div>
                         </div>
                       ))
                     ) : (
-                      <div className="p-4 text-center text-xs text-neutral-500">No recent activity found.</div>
+                      <div className="p-8 text-center flex flex-col items-center">
+                        <Bell className="w-8 h-8 text-neutral-300 mb-2" />
+                        <span className="text-xs text-neutral-500">You're all caught up!</span>
+                      </div>
                     )}
                   </div>
                 </div>

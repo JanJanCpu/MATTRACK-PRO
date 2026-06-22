@@ -6,7 +6,7 @@ from passlib.context import CryptContext
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 def seed_data():
-    # --- ADDED: THE DROP COMMAND ---
+    # --- THE DROP COMMAND ---
     print("Dropping old database tables to apply new schema changes...")
     Base.metadata.drop_all(bind=engine)
 
@@ -15,17 +15,7 @@ def seed_data():
     
     db = SessionLocal()
     try:
-        # We don't strictly need these delete queries anymore since drop_all wiped the tables, 
-        # but leaving them in provides a safe fallback.
-        print("Purging old multi-project records to clear local cache clusters...")
-        db.query(models.ActivityLog).delete() 
-        db.query(models.Inventory).delete()
-        db.query(models.MaterialRequest).delete()
-        db.query(models.Supplier).delete()
-        db.query(models.ProjectSite).delete()
-        db.query(models.User).delete() 
-
-        # --- THE MASTER KEY: ADD THE ADMIN ACCOUNT ---
+        # 1. Accounts
         print("Seeding default Admin System Owner...")
         admin = models.User(
             username="admin",
@@ -35,7 +25,6 @@ def seed_data():
             company_name="Pentabuild Corp"
         )
         
-        # --- NEW: ADD A STAFF MEMBER ---
         print("Seeding a test Staff Member...")
         staff_juan = models.User(
             username="juan_staff",
@@ -67,19 +56,24 @@ def seed_data():
         db.add_all([storage, makati, paco])
         db.commit() 
 
-        # 3. Add Suppliers
-        print("Adding hardware trading hubs and industrial suppliers...")
-        sup1 = models.Supplier(
-            name="Lumber Worx Trading Corp", address="Grace Park, Caloocan City", 
-            contact="0917-LUMBER-1", latitude=14.6534, longitude=120.9734, 
-            quality_rating=4.5, categories="Lumber, Wood, Plywood"
-        )
-        sup2 = models.Supplier(
-            name="Manila Steel Supply", address="Binondo, Manila", 
-            contact="0912-STEEL-2", latitude=14.6120, longitude=120.9650, 
-            quality_rating=4.2, categories="Steel, Rebar"
-        )
-        db.add_all([sup1, sup2])
+        # 3. Add AI-Compatible Suppliers
+        print("Adding AI-ready hardware trading hubs and industrial suppliers...")
+        sup1 = models.Supplier(name="SteelAsia Manila", address="Quezon City", contact="0917-123-4567", latitude=14.6000, longitude=121.0000, quality_rating=4.8)
+        sup2 = models.Supplier(name="Holcim Philippines", address="Taguig City", contact="0918-987-6543", latitude=14.5500, longitude=121.0500, quality_rating=4.5)
+        sup3 = models.Supplier(name="Apex Hardware (Sister Co)", address="Manila", contact="0919-555-8888", latitude=14.6200, longitude=120.9800, quality_rating=3.2, is_sister_company=True)
+        db.add_all([sup1, sup2, sup3])
+        db.commit()
+
+        # Add Supplier Catalogs (CRITICAL FOR AI RAG CONTEXT)
+        print("Injecting Supplier Material Catalogs for AI Advisory Engine...")
+        db.add_all([
+            models.SupplierMaterial(supplier_id=sup1.id, material_name="Threaded Rod", price=150.00, stock_level="High", delivery_rating=4.9),
+            models.SupplierMaterial(supplier_id=sup1.id, material_name="Deformed Rebar 10mm", price=180.00, stock_level="Medium", delivery_rating=4.7),
+            models.SupplierMaterial(supplier_id=sup2.id, material_name="Portland Cement", price=240.00, stock_level="High", delivery_rating=4.6),
+            models.SupplierMaterial(supplier_id=sup3.id, material_name="Threaded Rod", price=145.00, stock_level="Low", delivery_rating=2.1), # Cheaper, but terrible delivery!
+            models.SupplierMaterial(supplier_id=sup3.id, material_name="PVC Pipe 2 inch", price=120.00, stock_level="High", delivery_rating=3.5),
+        ])
+        db.commit()
 
         # 4. Add Initial Linked Inventory 
         print("Seeding Bodegero Inventory & Assets...")
