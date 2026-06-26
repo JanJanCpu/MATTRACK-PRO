@@ -243,15 +243,11 @@ def get_security_logs(token: str = Depends(oauth2_scheme), db: Session = Depends
 @app.get("/sites/", response_model=List[schemas.SiteResponse], tags=["Sites"])
 def list_sites(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_role: str = payload.get("role", "").lower()
-        user_id: int = payload.get("id")
+        jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
     except jose.JWTError:
         raise HTTPException(status_code=401, detail="Invalid Session")
 
-    if user_role in ["owner", "admin"]:
-        return db.query(models.ProjectSite).all()
-    return db.query(models.ProjectSite).filter(models.ProjectSite.manager_id == user_id).all()
+    return db.query(models.ProjectSite).all()
 
 @app.post("/sites/", response_model=schemas.SiteResponse, status_code=status.HTTP_201_CREATED, tags=["Sites"])
 def create_site(site: schemas.SiteCreate = Body(...), token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
@@ -330,34 +326,45 @@ def log_stock_transaction(transaction: schemas.InventoryBase = Body(...), token:
         item.status = transaction.status 
         action_text = f"Updated {transaction.item_name} ({transaction.brand}) stock by {transaction.quantity} {transaction.unit}."
     else:
-        inv_data = transaction.dict(exclude={"supplier_id", "batch_rating"})
+        # Prevent DB crash by excluding the new 'price' field from the standard inventory insert
+        inv_data = transaction.dict(exclude={"supplier_id", "batch_rating", "price"})
         item = models.Inventory(**inv_data)
         db.add(item)
         action_text = f"Initialized {transaction.quantity} {transaction.unit} of new item: {transaction.item_name}."
 
-    if hasattr(transaction, 'supplier_id') and transaction.supplier_id and hasattr(transaction, 'batch_rating') and transaction.batch_rating:
+    # --- TRANSACTIONAL LEARNING MAGIC ---
+    if hasattr(transaction, 'supplier_id') and transaction.supplier_id:
         sup_mat = db.query(models.SupplierMaterial).filter(
             models.SupplierMaterial.supplier_id == transaction.supplier_id,
             models.SupplierMaterial.material_name == transaction.item_name
         ).first()
 
         if sup_mat:
-            if sup_mat.delivery_rating == 0.0:
-                sup_mat.delivery_rating = transaction.batch_rating
-            else:
-                sup_mat.delivery_rating = (sup_mat.delivery_rating + transaction.batch_rating) / 2
+            # 1. Update Rating
+            if getattr(transaction, 'batch_rating', None):
+                if sup_mat.delivery_rating == 0.0:
+                    sup_mat.delivery_rating = transaction.batch_rating
+                else:
+                    sup_mat.delivery_rating = (sup_mat.delivery_rating + transaction.batch_rating) / 2
+            
+            # 2. Update Price
+            if getattr(transaction, 'price', None):
+                sup_mat.price = transaction.price
+                
         else:
+            # 3. Auto-generate catalog entry
             new_sup_mat = models.SupplierMaterial(
                 supplier_id=transaction.supplier_id,
                 material_name=transaction.item_name,
-                delivery_rating=transaction.batch_rating,
+                delivery_rating=getattr(transaction, 'batch_rating', 0.0) or 0.0,
+                price=getattr(transaction, 'price', 0.0) or 0.0,
                 stock_level="Available"
             )
             db.add(new_sup_mat)
         
         supplier_info = db.query(models.Supplier).filter(models.Supplier.id == transaction.supplier_id).first()
         sup_name = supplier_info.name if supplier_info else "Supplier"
-        action_text += f" (Rated delivery from {sup_name} as {transaction.batch_rating}/5 stars)."
+        action_text += f" (Sourced from {sup_name})."
 
     full_msg = f"User [{username}]: {action_text}"
     audit_log = models.ActivityLog(user_id=user_id, action=full_msg)
@@ -419,13 +426,13 @@ def bulk_upload_inventory(items: List[schemas.InventoryBase] = Body(...), token:
         if existing_item:
             existing_item.quantity += item_data.quantity
         else:
-            inv_data = item_data.dict(exclude={"supplier_id", "batch_rating"})
+            inv_data = item_data.dict(exclude={"supplier_id", "batch_rating", "price"})
             new_item = models.Inventory(**inv_data)
             db.add(new_item)
         
         added_count += 1
 
-        if item_data.supplier_id and item_data.batch_rating:
+        if getattr(item_data, 'supplier_id', None):
             supplier_exists = db.query(models.Supplier).filter(models.Supplier.id == item_data.supplier_id).first()
             if supplier_exists:
                 sup_mat = db.query(models.SupplierMaterial).filter(
@@ -434,22 +441,26 @@ def bulk_upload_inventory(items: List[schemas.InventoryBase] = Body(...), token:
                 ).first()
 
                 if sup_mat:
-                    if sup_mat.delivery_rating == 0.0:
-                        sup_mat.delivery_rating = item_data.batch_rating
-                    else:
-                        sup_mat.delivery_rating = (sup_mat.delivery_rating + item_data.batch_rating) / 2
+                    if getattr(item_data, 'batch_rating', None):
+                        if sup_mat.delivery_rating == 0.0:
+                            sup_mat.delivery_rating = item_data.batch_rating
+                        else:
+                            sup_mat.delivery_rating = (sup_mat.delivery_rating + item_data.batch_rating) / 2
+                    if getattr(item_data, 'price', None):
+                        sup_mat.price = item_data.price
                 else:
                     new_sup_mat = models.SupplierMaterial(
                         supplier_id=item_data.supplier_id,
                         material_name=item_data.item_name,
-                        delivery_rating=item_data.batch_rating,
+                        delivery_rating=getattr(item_data, 'batch_rating', 0.0) or 0.0,
+                        price=getattr(item_data, 'price', 0.0) or 0.0,
                         stock_level="Available"
                     )
                     db.add(new_sup_mat)
                 
                 updated_materials += 1
 
-    action_msg = f"User [{username}]: Bulk received {added_count} items. Updated AI rating data for {updated_materials} valid supplier entries."
+    action_msg = f"User [{username}]: Bulk received {added_count} items. Updated AI rating & price data for {updated_materials} valid supplier entries."
     
     audit_log = models.ActivityLog(user_id=user_id, action=action_msg)
     db.add(audit_log)
@@ -749,6 +760,57 @@ def procure_advice(site_id: int, item_name: str, db: Session = Depends(get_db)):
             
     return sorted(recommendations, key=lambda x: x['score'], reverse=True)
 
+# --- DYNAMIC FSN LOGISTICS MAP DATA ---
+@app.get("/logistics/map-data", tags=["Logistics"])
+def get_dynamic_map_data(db: Session = Depends(get_db)):
+    sites = db.query(models.ProjectSite).all()
+    inventory = db.query(models.Inventory).all()
+    suppliers = db.query(models.Supplier).all()
+
+    suggested_transfers = []
+    
+    # 1. Identify all critical shortages
+    shortages = [item for item in inventory if item.status in ["Critical", "Low Stock"] or item.quantity <= 0]
+    
+    # 2. Identify all surpluses
+    surpluses = [item for item in inventory if item.status == "Surplus"]
+
+    # 3. Calculate dynamic shortest-path transfers based on 15km Haversine rule
+    for short_item in shortages:
+        for surp_item in surpluses:
+            # Check if it's the exact same item, but located at a DIFFERENT site
+            if short_item.item_name.lower() == surp_item.item_name.lower() and short_item.site_id != surp_item.site_id:
+                
+                s1 = next((s for s in sites if s.id == short_item.site_id), None)
+                s2 = next((s for s in sites if s.id == surp_item.site_id), None)
+                
+                if s1 and s2:
+                    dist = compute_distance(s1.latitude, s1.longitude, s2.latitude, s2.longitude)
+                    # If within 15km threshold, map it as a suggested internal transfer route
+                    if dist <= 15.0:
+                        suggested_transfers.append({
+                            "material": short_item.item_name,
+                            "source_site_id": s2.id,
+                            "source_site_name": s2.site_name,
+                            "source_lat": s2.latitude,
+                            "source_lon": s2.longitude,
+                            "dest_site_id": s1.id,
+                            "dest_site_name": s1.site_name,
+                            "dest_lat": s1.latitude,
+                            "dest_lon": s1.longitude,
+                            "distance_km": round(dist, 2),
+                            "surplus_qty": surp_item.quantity,
+                            "short_qty": short_item.quantity
+                        })
+
+    return {
+        "sites": sites,
+        "suppliers": suppliers,
+        "transfers": suggested_transfers,
+        "shortages": shortages,
+        "surpluses": surpluses
+    }
+
 # --- LIVE RAG-POWERED AI CHATBOT ROUTE ---
 class ChatRequest(BaseModel):
     message: str
@@ -776,6 +838,14 @@ def chat_with_ai(req: ChatRequest = Body(...), db: Session = Depends(get_db)):
         rating = getattr(sm, 'delivery_rating', 'N/A')
         mat_context += f"- {sup_name} sells {sm.material_name} (Delivery Rating: {rating}/5)\n"
 
+    # --- THE INTERNAL TRANSFER UPGRADE ---
+    sites = db.query(models.ProjectSite).all()
+    inventory = db.query(models.Inventory).all()
+    inventory_context = "\nINTERNAL INVENTORY (FOR TRANSFERS/BORROWING):\n"
+    for inv in inventory:
+        site_name = next((s.site_name for s in sites if s.id == inv.site_id), "Unknown Site")
+        inventory_context += f"- {inv.item_name} ({inv.brand}) | Qty: {inv.quantity} {inv.unit} | Status: {inv.status} | Location: {site_name}\n"
+
     # =====================================================================
     # 3. THE PARAMETERS (Softened Enterprise System Prompt Guardrails)
     # =====================================================================
@@ -791,42 +861,52 @@ def chat_with_ai(req: ChatRequest = Body(...), db: Session = Depends(get_db)):
     - If the user's request is vague (e.g., "I need stuff" or "I need steel rebars"), DO NOT block them. Instead, be helpful! Give a general recommendation based on the verified suppliers below, and politely ask them to clarify the specific project site and quantity needed so you can finalize a dispatch.
 
     [LIVE DATABASE CONTEXT]:
-    Use the following real-time database records to answer the user's question. Do NOT invent or hallucinate suppliers.
+    Use the following real-time database records to answer the user's question. Do NOT invent or hallucinate suppliers or inventory items.
     {supplier_context}
     {mat_context}
+    {inventory_context}
 
     [BEHAVIOR]:
     - Be concise, highly professional, and analytical. Use bullet points for readability.
-    - If asked to source a material, recommend the supplier with the highest rating for that specific material.
+    - PRIORITIZE INTERNAL TRANSFERS: If the user asks to borrow or procure a material/tool, explicitly check the INTERNAL INVENTORY first. If the item exists and its Status is "Available" or "Surplus" at another project site, recommend initiating an internal transfer from that site to save costs!
+    - If internal transfer is not possible (or if buying externally), recommend the supplier with the highest rating for that specific material.
     - If asked to write a dispatch message, write a short 2-sentence WhatsApp-style message the manager can copy-paste.
     """
     # =====================================================================
 
     try:
         # 4. DYNAMIC MODEL SELECTION
-        # Instead of guessing the model name, ask Google what models your specific API key is allowed to use!
         available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
         
         if not available_models:
             return {"reply": "⚠️ **AI Routing Error:** Your API key is valid, but Google is not providing any accessible models for your region/tier."}
             
-        # Try to grab a fast 'flash' model, otherwise just use whatever Google gives us first
         selected_model = available_models[0]
         for m_name in available_models:
             if 'flash' in m_name:
                 selected_model = m_name
                 break
                 
-        print(f"--- SUCCESS: Connected to Google AI. Using model: {selected_model} ---")
-        
-        # Call the Live LLM with the dynamically verified model
         model = genai.GenerativeModel(model_name=selected_model)
-        
-        # Inject the system instructions directly into the prompt to guarantee compatibility
         full_prompt = f"{system_instruction}\n\n--- USER REQUEST ---\n{req.message}"
         
-        response = model.generate_content(full_prompt)
-        return {"reply": response.text}
+        # 5. ENTERPRISE RETRY LOGIC (Handles Free-Tier 429 Rate Limits!)
+        import time
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = model.generate_content(full_prompt)
+                return {"reply": response.text}
+            except Exception as e:
+                error_msg = str(e)
+                # If it's a Quota/Rate Limit error and we haven't maxed out our retries
+                if "429" in error_msg and attempt < max_retries - 1:
+                    print(f"--- Rate limit hit. Waiting 3 seconds before retry {attempt + 1}/{max_retries}... ---")
+                    time.sleep(3) # Silently wait 3 seconds and try again
+                    continue
+                # If it's a different error or we ran out of retries, throw the error
+                raise e
+
     except Exception as e:
         return {"reply": f"⚠️ **AI Routing Error:** Failed to communicate with the neural network. Details: {str(e)}"}
 

@@ -115,6 +115,7 @@ class InventoryBase(BaseModel):
     
     supplier_id: Optional[int] = None
     batch_rating: Optional[float] = None
+    price: Optional[float] = None # Added to support Transactional Learning for AI
 
 class InventoryCreate(InventoryBase):
     pass

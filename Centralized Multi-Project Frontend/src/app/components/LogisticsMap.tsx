@@ -10,8 +10,6 @@ import {
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
 import { Search, MapPin } from "lucide-react";
-import { sitesAPI, suppliersAPI } from "../../services/apiService";
-import type { ProjectSite, Supplier } from "../../types";
 
 // --- Leaflet Icon Fixes ---
 delete (L.Icon.Default.prototype as any)._getIconUrl;
@@ -54,63 +52,95 @@ export function LogisticsMap() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // --- Filter & Search States ---
   const [showProjects, setShowProjects] = useState(true);
   const [showSuppliers, setShowSuppliers] = useState(true);
   const [showCrowdsourced, setShowCrowdsourced] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   
-  // --- NEW: Routing State ---
-  const [transferRoute, setTransferRoute] = useState<[number, number][]>([]);
+  // Array to hold multiple active transfer routes!
+  const [transferRoutes, setTransferRoutes] = useState<[number, number][][]>([]);
 
-  const fetchData = async () => {
+  const fetchDynamicMapData = async () => {
     try {
       setLoading(true);
-      const [sitesList, suppliersList] = await Promise.all([
-        sitesAPI.list(),
-        suppliersAPI.list(),
-      ]);
+      const BASE_URL = `http://${window.location.hostname}:8000`;
+      const token = localStorage.getItem("token") || localStorage.getItem("access_token");
+      
+      const headers: Record<string, string> = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      
+      const response = await fetch(`${BASE_URL}/logistics/map-data`, { headers });
+      if (!response.ok) throw new Error("Failed to fetch map data");
+      
+      const data = await response.json();
+      const mapLocs: MapLocation[] = [];
 
-      const mapLocations: MapLocation[] = [
-        ...sitesList.map((site, idx) => {
-          let type: MapLocation["type"] = "project";
-          let details = `Project Site ${idx + 1} - Active`;
-          
-          let address = (site as any).address || "Address not provided";
+      // 1. Plot Project Sites (Checking dynamically for Shortages or Surpluses)
+      data.sites.forEach((site: any) => {
+        const isShortage = data.shortages.some((s: any) => s.site_id === site.id);
+        const isSurplus = data.surpluses.some((s: any) => s.site_id === site.id);
 
-          if (site.site_name.includes("Makati")) {
-            type = "surplus";
-            details = "Cement (50 extra bags ready for transfer)";
-          } else if (site.site_name.includes("Paco")) {
+        let type: MapLocation["type"] = "project";
+        let details = "Active Project Site (Inventory Stable)";
+
+        if (isShortage) {
             type = "shortage";
-            details = "Cement (Critical Needs: 30 bags)";
-          }
+            const shortItems = data.shortages.filter((s: any) => s.site_id === site.id).map((s: any) => `${s.item_name} (${s.quantity} ${s.unit})`);
+            details = `CRITICAL SHORTAGE: ${shortItems.join(', ')}`;
+        } else if (isSurplus) {
+            type = "surplus";
+            const surpItems = data.surpluses.filter((s: any) => s.site_id === site.id).map((s: any) => `${s.item_name} (${s.quantity} ${s.unit})`);
+            details = `SURPLUS AVAILABLE: ${surpItems.join(', ')}`;
+        }
 
-          return {
+        mapLocs.push({
             id: site.id,
             type,
             name: site.site_name,
-            address,
+            address: site.address || "Address not provided",
             lat: site.latitude,
             lng: site.longitude,
-            details,
-          };
-        }),
-        ...suppliersList.map((supplier) => {
-          let address = (supplier as any).address || "Address not provided";
+            details
+        });
+      });
 
-          return {
-            id: supplier.id + 1000,
-            type: supplier.quality_rating >= 4 ? ("supplier" as const) : ("crowdsource" as const),
-            name: supplier.name,
-            address,
-            lat: supplier.latitude,
-            lng: supplier.longitude,
-            details: `Quality Rating: ${supplier.quality_rating.toFixed(1)} - ${supplier.contact}`,
-          };
-        }),
-      ];
-      setLocations(mapLocations);
+      // 2. Plot Official Suppliers & Crowdsourced Stores
+      data.suppliers.forEach((sup: any) => {
+        mapLocs.push({
+            id: sup.id + 1000, 
+            type: sup.quality_rating >= 4.0 ? "supplier" : "crowdsource",
+            name: sup.name,
+            address: sup.address || "Address not provided",
+            lat: sup.latitude,
+            lng: sup.longitude,
+            details: `Quality Rating: ${sup.quality_rating.toFixed(1)}/5 - Contact: ${sup.contact}`
+        });
+      });
+
+      setLocations(mapLocs);
+
+      // 3. Process the Suggested Transfer Routes via OSRM
+      const newRoutes: [number, number][][] = [];
+      for (const t of data.transfers) {
+          try {
+              const url = `https://router.project-osrm.org/route/v1/driving/${t.source_lon},${t.source_lat};${t.dest_lon},${t.dest_lat}?overview=full&geometries=geojson`;
+              const routeRes = await fetch(url);
+              const routeData = await routeRes.json();
+              
+              if (routeData.routes && routeData.routes.length > 0) {
+                  // GeoJSON provides [lon, lat], Leaflet polyline needs [lat, lon]
+                  const coords = routeData.routes[0].geometry.coordinates.map((c: number[]) => [c[1], c[0]]);
+                  newRoutes.push(coords);
+              }
+          } catch (e) {
+              console.warn("OSRM Failed, falling back to straight line");
+              newRoutes.push([[t.source_lat, t.source_lon], [t.dest_lat, t.dest_lon]]);
+          }
+      }
+      setTransferRoutes(newRoutes);
+
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load locations");
     } finally {
@@ -119,7 +149,10 @@ export function LogisticsMap() {
   };
 
   useEffect(() => {
-    fetchData();
+    fetchDynamicMapData();
+    // Auto-refresh map data every 30 seconds to catch new shortages
+    const interval = setInterval(fetchDynamicMapData, 30000); 
+    return () => clearInterval(interval);
   }, []);
 
   const totalProjects = locations.filter((l) => ["project", "surplus", "shortage"].includes(l.type)).length;
@@ -142,35 +175,6 @@ export function LogisticsMap() {
 
     return true;
   });
-
-  // --- NEW: OSRM Routing Logic ---
-  const surplusLoc = visibleLocations.find(l => l.type === "surplus");
-  const shortageLoc = visibleLocations.find(l => l.type === "shortage");
-
-  useEffect(() => {
-    if (surplusLoc && shortageLoc) {
-      const fetchRoadRoute = async () => {
-        try {
-          // OSRM format: longitude,latitude
-          const url = `https://router.project-osrm.org/route/v1/driving/${surplusLoc.lng},${surplusLoc.lat};${shortageLoc.lng},${shortageLoc.lat}?overview=full&geometries=geojson`;
-          const response = await fetch(url);
-          const data = await response.json();
-          
-          if (data.routes && data.routes.length > 0) {
-            // GeoJSON returns [lon, lat], but Leaflet needs [lat, lon]
-            const coords = data.routes[0].geometry.coordinates.map((c: number[]) => [c[1], c[0]]);
-            setTransferRoute(coords);
-          }
-        } catch (error) {
-          console.error("OSRM Routing failed, falling back to straight line.", error);
-          setTransferRoute([[surplusLoc.lat, surplusLoc.lng], [shortageLoc.lat, shortageLoc.lng]]);
-        }
-      };
-      fetchRoadRoute();
-    } else {
-      setTransferRoute([]); // Clear the route if pins are hidden
-    }
-  }, [surplusLoc?.id, shortageLoc?.id]);
 
   return (
     <div className="h-full flex flex-col space-y-4 animate-in fade-in duration-500">
@@ -252,7 +256,7 @@ export function LogisticsMap() {
         {/* MAP */}
         <div className="lg:col-span-3 bg-neutral-100 border border-neutral-200 rounded-xl overflow-hidden relative shadow-inner z-0">
           {!loading && (
-            <MapContainer center={[14.57, 121.01]} zoom={13} className="w-full h-full">
+            <MapContainer center={[14.57, 121.01]} zoom={13} className="w-full h-full z-0">
               <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
               
               {visibleLocations.map((loc, i) => (
@@ -278,13 +282,14 @@ export function LogisticsMap() {
                 </Marker>
               ))}
 
-              {/* DYNAMIC ROAD ROUTING LINE */}
-              {showProjects && transferRoute.length > 0 && (
+              {/* DYNAMIC ROAD ROUTING LINES */}
+              {showProjects && transferRoutes.map((route, idx) => (
                 <Polyline
-                  positions={transferRoute}
+                  key={idx}
+                  positions={route}
                   pathOptions={{ color: '#4F46E5', dashArray: '10, 10', weight: 4, opacity: 0.9 }}
                 />
-              )}
+              ))}
             </MapContainer>
           )}
         </div>
@@ -292,3 +297,4 @@ export function LogisticsMap() {
     </div>
   );
 }
+

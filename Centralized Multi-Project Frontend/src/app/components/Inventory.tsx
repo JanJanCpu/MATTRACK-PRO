@@ -18,6 +18,8 @@ import {
 } from "lucide-react";
 import React, { useState, useEffect } from "react";
 import { useNavigate, useLocation } from "react-router-dom"; 
+
+// REAL API IMPORTS
 import { inventoryAPI, sitesAPI, suppliersAPI, transferAPI } from "../../services/apiService"; 
 import type { Inventory as InventoryItem, ProjectSite, Supplier } from "../../types"; 
 import { BulkImportWizard } from "./BulkImportWizard";
@@ -53,14 +55,15 @@ export function Inventory() {
   const [isDeleteMode, setIsDeleteMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
 
-  // Transaction Modal State
+  // Transaction Modal State (UPDATED for Transactional Learning)
   const [modalType, setModalType] = useState<"IN" | "OUT" | "TRANSFER" | null>(null);
   const [activeTransactionItem, setActiveTransactionItem] = useState<InventoryWithCategory | null>(null);
   const [transactionForm, setTransactionForm] = useState({
     quantity: 0,
     destination_site_id: "",
     supplier_id: "",
-    batch_rating: 0
+    batch_rating: 0,
+    price: 0
   });
 
   const [itemType, setItemType] = useState<"consumable" | "asset">("consumable");
@@ -72,23 +75,39 @@ export function Inventory() {
     status: "Healthy",
     fsn_status: "FAST", 
     site_id: "",
+    supplier_id: "",
+    batch_rating: 0,
+    price: 0
   });
 
-  // --- NEW: THE ROUTING LISTENER ---
-  // This catches clicks from the Dashboard and auto-filters the table!
+  // --- FSN ALGORITHM HELPER ---
+  const calculateFSN = (status: string) => {
+    if (status === "Critical" || status === "Low Stock") return "FAST";
+    if (status === "Surplus") return "NON-MOVING";
+    return "SLOW";
+  };
+
+  // --- THE ROUTING LISTENER ---
   useEffect(() => {
-    if (location.state?.autoFilter) {
-      setStatusFilter(location.state.autoFilter);
-    }
-    if (location.state?.autoPivotSiteId) {
-      setSiteFilter(location.state.autoPivotSiteId);
-      setPivotSiteName(location.state.siteName || "");
-      setNewItem(prev => ({ ...prev, site_id: location.state.autoPivotSiteId }));
+    const state = location.state as any;
+    if (!state) return;
+
+    let processedFilters = false;
+
+    if (state.autoFilter) {
+      setStatusFilter(state.autoFilter);
+      processedFilters = true;
     }
     
-    // Clear the router state so it doesn't get stuck if the user refreshes
-    if (location.state) {
-      navigate(location.pathname, { replace: true, state: {} });
+    if (state.autoPivotSiteId) {
+      setSiteFilter(state.autoPivotSiteId);
+      setPivotSiteName(state.siteName || "");
+      setNewItem(prev => ({ ...prev, site_id: state.autoPivotSiteId }));
+      processedFilters = true;
+    }
+    
+    if (processedFilters) {
+      navigate(location.pathname, { replace: true, state: null });
     }
   }, [location.state, navigate, location.pathname]);
 
@@ -156,6 +175,10 @@ export function Inventory() {
 
   const handleAddInventory = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (newItem.supplier_id && newItem.batch_rating === 0) {
+        return alert("Please provide a star rating for this delivery batch.");
+    }
+
     try {
       await inventoryAPI.logTransaction({
         item_name: newItem.item_name,
@@ -163,12 +186,16 @@ export function Inventory() {
         quantity: Number(newItem.quantity),
         unit: newItem.unit,
         status: newItem.status,
-        fsn_status: newItem.fsn_status,
+        fsn_status: calculateFSN(newItem.status), // Dynamically calculate FSN
         site_id: Number(newItem.site_id),
+        supplier_id: newItem.supplier_id ? Number(newItem.supplier_id) : undefined,
+        batch_rating: newItem.batch_rating > 0 ? Number(newItem.batch_rating) : undefined,
+        price: newItem.price > 0 ? Number(newItem.price) : undefined,
       });
 
       setShowAddForm(false);
-setNewItem({ item_name: "", brand: "Generic/No Brand", quantity: 0, unit: "Bags", status: "Healthy", fsn_status: "FAST", site_id: siteFilter ? String(siteFilter) : "" });      fetchData();
+      setNewItem({ item_name: "", brand: "Generic/No Brand", quantity: 0, unit: "Bags", status: "Healthy", fsn_status: "FAST", site_id: siteFilter ? String(siteFilter) : "", supplier_id: "", batch_rating: 0, price: 0 });      
+      fetchData();
       
       window.dispatchEvent(new Event("inventoryUpdated"));
     } catch (err) {
@@ -201,6 +228,7 @@ setNewItem({ item_name: "", brand: "Generic/No Brand", quantity: 0, unit: "Bags"
                 unit: activeTransactionItem.unit
             });
             setModalType(null);
+            setTransactionForm({ quantity: 0, destination_site_id: "", supplier_id: "", batch_rating: 0, price: 0 });
             fetchData();
             window.dispatchEvent(new Event("inventoryUpdated"));
             alert("Transfer dispatched successfully! It is now IN TRANSIT.");
@@ -238,13 +266,15 @@ setNewItem({ item_name: "", brand: "Generic/No Brand", quantity: 0, unit: "Bags"
         quantity: finalQuantity,
         unit: activeTransactionItem.unit,
         status: finalStatus,
-        fsn_status: "FAST", 
+        fsn_status: calculateFSN(finalStatus), // Dynamically calculate FSN
         site_id: activeTransactionItem.site_id,
         supplier_id: transactionForm.supplier_id ? Number(transactionForm.supplier_id) : undefined,
-        batch_rating: transactionForm.batch_rating > 0 ? transactionForm.batch_rating : undefined
+        batch_rating: transactionForm.batch_rating > 0 ? Number(transactionForm.batch_rating) : undefined,
+        price: transactionForm.price > 0 ? Number(transactionForm.price) : undefined,
       });
 
       setModalType(null);
+      setTransactionForm({ quantity: 0, destination_site_id: "", supplier_id: "", batch_rating: 0, price: 0 });
       fetchData();
       window.dispatchEvent(new Event("inventoryUpdated"));
     } catch (err) {
@@ -295,7 +325,6 @@ setNewItem({ item_name: "", brand: "Generic/No Brand", quantity: 0, unit: "Bags"
     processedData = processedData.filter(i => i.status === statusFilter);
   }
 
-  // Weight logic guarantees Critical and Low Stock automatically bubble to the top of the ledger.
   const getStatusWeight = (status: string) => {
     switch(status) {
       case "Critical": case "Maintenance": return 1; 
@@ -395,7 +424,6 @@ setNewItem({ item_name: "", brand: "Generic/No Brand", quantity: 0, unit: "Bags"
 
       {activeTab === "inventory" && (
         <>
-          {/* THE PARAMETRIC PIVOT BANNER */}
           {siteFilter && (
             <div className="bg-indigo-50 border border-indigo-200 p-4 rounded-xl flex items-center justify-between animate-in fade-in">
               <div className="flex items-center gap-2 text-indigo-800 font-medium text-sm">
@@ -404,7 +432,7 @@ setNewItem({ item_name: "", brand: "Generic/No Brand", quantity: 0, unit: "Bags"
               <button 
                 onClick={() => {
                   setSiteFilter(null);
-                  navigate('.', { replace: true, state: {} }); // Clear state
+                  navigate('.', { replace: true, state: null }); 
                 }}
                 className="px-3 py-1 bg-white border border-indigo-200 text-indigo-600 hover:bg-indigo-100 rounded text-xs font-bold transition-colors"
               >
@@ -426,68 +454,94 @@ setNewItem({ item_name: "", brand: "Generic/No Brand", quantity: 0, unit: "Bags"
                 </button>
               </div>
 
-              <form onSubmit={handleAddInventory} className="grid grid-cols-1 md:grid-cols-6 gap-4 items-end">
-                <div>
-                  <label className="block text-xs font-bold text-neutral-500 mb-1">Project Site</label>
-                  <select className="w-full p-2 border rounded-lg text-sm bg-white focus:ring-2 focus:ring-emerald-500 outline-none" value={newItem.site_id} onChange={(e) => setNewItem({ ...newItem, site_id: e.target.value })} required>
-                    <option value="">Select Managed Site...</option>
-                    {editableSites.map((s) => <option key={s.id} value={s.id}>{s.site_name}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-neutral-500 mb-1">{itemType === "consumable" ? "Material Name" : "Tool Name"}</label>
-                  <input type="text" className="w-full p-2 border rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none" placeholder={itemType === "consumable" ? "e.g. Portland Cement" : "e.g. Angle Grinder"} value={newItem.item_name} onChange={(e) => setNewItem({ ...newItem, item_name: e.target.value })} required />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-neutral-500 mb-1">Brand/Spec</label>
-                  <input type="text" className="w-full p-2 border rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none" placeholder={itemType === "consumable" ? "e.g. Republic" : "e.g. Bosch 800W"} value={newItem.brand} onChange={(e) => setNewItem({ ...newItem, brand: e.target.value })} />
-                </div>
-                <div className="grid grid-cols-2 gap-2">
+              <form onSubmit={handleAddInventory} className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-6 gap-4 items-end">
                   <div>
-                    <label className="block text-xs font-bold text-neutral-500 mb-1">Qty</label>
-                    <input type="number" className="w-full p-2 border rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none" value={newItem.quantity} onChange={(e) => setNewItem({ ...newItem, quantity: Number(e.target.value) })} required />
+                    <label className="block text-xs font-bold text-neutral-500 mb-1">Project Site</label>
+                    <select className="w-full p-2 border rounded-lg text-sm bg-white focus:ring-2 focus:ring-emerald-500 outline-none" value={newItem.site_id} onChange={(e) => setNewItem({ ...newItem, site_id: e.target.value })} required>
+                      <option value="">Select Managed Site...</option>
+                      {editableSites.map((s) => <option key={s.id} value={s.id}>{s.site_name}</option>)}
+                    </select>
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-neutral-500 mb-1">Unit</label>
-                    <select className="w-full p-2 border rounded-lg text-sm bg-white focus:ring-2 focus:ring-emerald-500 outline-none" value={newItem.unit} onChange={(e) => setNewItem({ ...newItem, unit: e.target.value })}>
+                    <label className="block text-xs font-bold text-neutral-500 mb-1">{itemType === "consumable" ? "Material Name" : "Tool Name"}</label>
+                    <input type="text" className="w-full p-2 border rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none" placeholder={itemType === "consumable" ? "e.g. Portland Cement" : "e.g. Angle Grinder"} value={newItem.item_name} onChange={(e) => setNewItem({ ...newItem, item_name: e.target.value })} required />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-neutral-500 mb-1">Brand/Spec</label>
+                    <input type="text" className="w-full p-2 border rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none" placeholder={itemType === "consumable" ? "e.g. Republic" : "e.g. Bosch 800W"} value={newItem.brand} onChange={(e) => setNewItem({ ...newItem, brand: e.target.value })} />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-xs font-bold text-neutral-500 mb-1">Qty</label>
+                      <input type="number" min="1" className="w-full p-2 border rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none" value={newItem.quantity || ""} onChange={(e) => setNewItem({ ...newItem, quantity: Number(e.target.value) })} required />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-neutral-500 mb-1">Unit</label>
+                      <select className="w-full p-2 border rounded-lg text-sm bg-white focus:ring-2 focus:ring-emerald-500 outline-none" value={newItem.unit} onChange={(e) => setNewItem({ ...newItem, unit: e.target.value })}>
+                        {itemType === "consumable" ? (
+                          <>
+                            <option value="Bags">Bags</option>
+                            <option value="Pcs">Pcs</option>
+                            <option value="Kilos">Kilos</option>
+                            <option value="Linear Ft">Linear Ft</option>
+                            <option value="Cu.m">Cu.m</option>
+                          </>
+                        ) : (
+                          <>
+                            <option value="Unit">Unit</option>
+                            <option value="Set">Set</option>
+                          </>
+                        )}
+                      </select>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-neutral-500 mb-1">Status</label>
+                    <select className="w-full p-2 border rounded-lg text-sm bg-white focus:ring-2 focus:ring-emerald-500 outline-none" value={newItem.status} onChange={(e) => setNewItem({ ...newItem, status: e.target.value })}>
                       {itemType === "consumable" ? (
                         <>
-                          <option value="Bags">Bags</option>
-                          <option value="Pcs">Pcs</option>
-                          <option value="Kilos">Kilos</option>
-                          <option value="Linear Ft">Linear Ft</option>
-                          <option value="Cu.m">Cu.m</option>
+                          <option value="Healthy">Healthy</option>
+                          <option value="Low Stock">Low Stock</option>
+                          <option value="Critical">Critical</option>
+                          <option value="Surplus">Surplus</option>
                         </>
                       ) : (
                         <>
-                          <option value="Unit">Unit</option>
-                          <option value="Set">Set</option>
+                          <option value="Available">Available</option>
+                          <option value="In Use">In Use</option>
+                          <option value="Maintenance">Maintenance</option>
                         </>
                       )}
                     </select>
                   </div>
                 </div>
-                <div>
-                  <label className="block text-xs font-bold text-neutral-500 mb-1">Status</label>
-                  <select className="w-full p-2 border rounded-lg text-sm bg-white focus:ring-2 focus:ring-emerald-500 outline-none" value={newItem.status} onChange={(e) => setNewItem({ ...newItem, status: e.target.value })}>
-                    {itemType === "consumable" ? (
+
+                {/* --- Transactional Learning Inputs for New Stock --- */}
+                <div className="bg-neutral-50 p-4 rounded-lg border border-neutral-200">
+                  <label className="block text-xs font-bold text-neutral-500 mb-2">Supplier Source & Procurement Data (Optional)</label>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                      <select className="w-full p-2 border rounded-lg text-sm bg-white focus:ring-2 focus:ring-emerald-500 outline-none" value={newItem.supplier_id} onChange={(e) => setNewItem({ ...newItem, supplier_id: e.target.value })}>
+                        <option value="">No Supplier Selected</option>
+                        {suppliersList.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                      </select>
+                    </div>
+                    {newItem.supplier_id && (
                       <>
-                        <option value="Healthy">Healthy</option>
-                        <option value="Low Stock">Low Stock</option>
-                        <option value="Critical">Critical</option>
-                        <option value="Surplus">Surplus</option>
-                      </>
-                    ) : (
-                      <>
-                        <option value="Available">Available</option>
-                        <option value="In Use">In Use</option>
-                        <option value="Maintenance">Maintenance</option>
+                        <div>
+                          <input type="number" min="0" step="0.01" className="w-full p-2 border rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none" placeholder="Unit Price (₱) e.g. 250.00" value={newItem.price || ""} onChange={(e) => setNewItem({ ...newItem, price: Number(e.target.value) })} />
+                        </div>
+                        <div>
+                          <input type="number" min="1" max="5" className="w-full p-2 border rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none" placeholder="Delivery Rating (1 to 5 Stars)" value={newItem.batch_rating || ""} onChange={(e) => setNewItem({ ...newItem, batch_rating: Number(e.target.value) })} required />
+                        </div>
                       </>
                     )}
-                  </select>
+                  </div>
                 </div>
+
                 <button type="submit" className="bg-slate-900 text-white py-2 rounded-lg font-bold hover:bg-slate-800 transition-colors w-full">
-                  Log Stock
+                  Log Initial Stock
                 </button>
               </form>
             </div>
@@ -556,9 +610,18 @@ setNewItem({ item_name: "", brand: "Generic/No Brand", quantity: 0, unit: "Bags"
                               <span className="text-base">{item.quantity} <span className="text-neutral-400 font-normal text-xs">{item.unit}</span></span>
                             </div>
                           </td>
+                          
+                          {/* DYNAMIC FSN BADGE RENDERING */}
                           <td className="px-5 py-4 text-center">
-                            <span className="text-[10px] font-black text-neutral-400 bg-neutral-100 px-2 py-1 rounded">{item.fsn_status}</span>
+                            <span className={`inline-flex text-[10px] font-black px-2 py-1 rounded tracking-wider
+                              ${calculateFSN(item.status) === 'FAST' ? 'text-amber-700 bg-amber-100' : 
+                                calculateFSN(item.status) === 'NON-MOVING' ? 'text-blue-700 bg-blue-100' : 
+                                'text-emerald-700 bg-emerald-100'}`}
+                            >
+                              {calculateFSN(item.status)}
+                            </span>
                           </td>
+
                           <td className="px-5 py-4 text-center">
                             <span className={`inline-flex px-2.5 py-1 rounded border text-[10px] font-bold uppercase tracking-wider ${getStatusColor(item.status)}`}>
                               {item.status}
@@ -600,7 +663,7 @@ setNewItem({ item_name: "", brand: "Generic/No Brand", quantity: 0, unit: "Bags"
         </>
       )}
 
-      {/* Audit Tab Logic Remains Identical */}
+      {/* Audit Tab */}
       {activeTab === "audit" && (
         <div className="bg-white border border-neutral-200 rounded-xl shadow-sm overflow-hidden animate-in slide-in-from-bottom-4">
           <div className="px-6 py-5 border-b border-neutral-200 bg-slate-900 flex items-center gap-3">
@@ -659,6 +722,48 @@ setNewItem({ item_name: "", brand: "Generic/No Brand", quantity: 0, unit: "Bags"
                 <p className="text-xs text-neutral-500 mt-1">Current Stock: {activeTransactionItem.quantity} {activeTransactionItem.unit}</p>
               </div>
 
+              {/* --- Transactional Learning Inputs for Log Delivery --- */}
+              {modalType === "IN" && (
+                <div className="space-y-4 pt-2 border-t border-neutral-100">
+                  <div>
+                    <label className="block text-xs font-bold text-neutral-500 uppercase mb-2">Supplier (Optional)</label>
+                    <select
+                      value={transactionForm.supplier_id}
+                      onChange={(e) => setTransactionForm({ ...transactionForm, supplier_id: e.target.value })}
+                      className="w-full p-3 border border-neutral-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                    >
+                      <option value="">No Supplier / General Delivery</option>
+                      {suppliersList.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                    </select>
+                  </div>
+
+                  {transactionForm.supplier_id && (
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-bold text-neutral-500 uppercase mb-2">Unit Price (₱)</label>
+                        <input
+                          type="number" min="0" step="0.01"
+                          value={transactionForm.price || ""}
+                          onChange={(e) => setTransactionForm({ ...transactionForm, price: Number(e.target.value) })}
+                          className="w-full p-3 border border-neutral-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                          placeholder="e.g. 250.00"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-neutral-500 uppercase mb-2">Delivery Rating (1-5)</label>
+                        <input
+                          type="number" min="1" max="5" required
+                          value={transactionForm.batch_rating || ""}
+                          onChange={(e) => setTransactionForm({ ...transactionForm, batch_rating: Number(e.target.value) })}
+                          className="w-full p-3 border border-neutral-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                          placeholder="Rate 1 to 5"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {modalType === "TRANSFER" && (
                 <div>
                   <label className="block text-xs font-bold text-neutral-500 uppercase mb-2 text-blue-600">Destination Project Site</label>
@@ -676,7 +781,7 @@ setNewItem({ item_name: "", brand: "Generic/No Brand", quantity: 0, unit: "Bags"
                 </div>
               )}
 
-              <div>
+              <div className="pt-2 border-t border-neutral-100 mt-4">
                 <label className="block text-xs font-bold text-neutral-500 uppercase mb-2">Quantity {modalType === "IN" ? "Received" : modalType === "TRANSFER" ? "To Transfer" : "Used"}</label>
                 <div className="flex items-center gap-3">
                   <input 
@@ -704,4 +809,8 @@ setNewItem({ item_name: "", brand: "Generic/No Brand", quantity: 0, unit: "Bags"
       )}
     </div>
   );
+}
+
+export default function App() {
+  return <Inventory />;
 }
