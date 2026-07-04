@@ -1,0 +1,7 @@
+@import "tailwindcss";
+@import "./theme.css";
+
+/* Force scan from the absolute root of the frontend project */
+@source "../../index.html";
+@source "../../src/**/*.{js,ts,jsx,tsx}";
+

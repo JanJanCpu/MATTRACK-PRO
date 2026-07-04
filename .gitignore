@@ -1,0 +1,26 @@
+# Environments
+.venv/
+backend/.venv/
+
+# Environment variables
+.env
+backend/.env
+
+# Python Cache
+__pycache__/
+*.pyc
+
+# IDEs
+.vscode/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# Frontend
+node_modules/
+dist/
+.env.local
