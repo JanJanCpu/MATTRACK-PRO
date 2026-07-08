@@ -1,16 +1,15 @@
 import {
   Building2,
   AlertTriangle,
-  Truck,
   TrendingUp,
-  BrainCircuit,
   Zap,
   Loader,
   X,
   Download,
   ArrowRight,
   BellRing,
-  Star 
+  Star,
+  Lock
 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { useState, useEffect } from "react";
@@ -31,7 +30,9 @@ export function Dashboard() {
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedSiteId, setSelectedSiteId] = useState<number | null>(null);
-  const [updateForm, setUpdateForm] = useState({ stage: "Pre-construction", progress: 0 });
+  
+  // Updated initial state to match new flow
+  const [updateForm, setUpdateForm] = useState({ stage: "Pre Construction" });
 
   useEffect(() => {
     const token = localStorage.getItem("token");
@@ -76,12 +77,13 @@ export function Dashboard() {
   const handleSaveProgress = async () => {
     if (!selectedSiteId) return;
     try {
-      await sitesAPI.updateProgress(selectedSiteId, updateForm.stage, updateForm.progress);
+      // Calls the newly updated backend endpoint
+      await sitesAPI.updateStatus(selectedSiteId, updateForm.stage);
       setIsModalOpen(false);
       const sitesData = await sitesAPI.list();
       setSites(sitesData);
     } catch (error) {
-      alert("Failed to update progress. Check your connection.");
+      alert("Failed to update status. Check your connection.");
     }
   };
 
@@ -105,7 +107,6 @@ export function Dashboard() {
   const surplusItems = inventory.filter((i) => i.status === "Surplus");
   const lowStockItems = inventory.filter((i) => i.status === "Low Stock");
 
-  // --- DASHBOARD ROUTING SHORTCUTS ---
   const metrics = [
     {
       label: "Active Project Sites",
@@ -141,6 +142,17 @@ export function Dashboard() {
     },
   ];
 
+  // Helper to map the linear phases to a visual percentage for the table
+  const getProgressFromStage = (stage: string) => {
+    switch (stage) {
+      case "Pre Construction": return 0;
+      case "Mid Construction": return 40;
+      case "Finishing": return 85;
+      case "Post Construction": return 100;
+      default: return 0;
+    }
+  };
+
   const projects = sites.map((site) => ({
     raw_id: site.id,
     id: `SITE-${site.id}`,
@@ -148,8 +160,8 @@ export function Dashboard() {
     manager_id: site.manager_id,
     location: `${site.latitude.toFixed(2)}, ${site.longitude.toFixed(2)}`,
     status: inventory.some((i) => i.site_id === site.id && i.status === "Critical") ? "Critical" : "On Track",
-    progress: site.progress_percentage || 0, 
-    stage_status: site.stage_status || "Pre-construction", 
+    progress: getProgressFromStage(site.stage_status || "Pre Construction"), 
+    stage_status: site.stage_status || "Pre Construction", 
     shortages: inventory.filter((i) => i.site_id === site.id && i.status === "Critical").length,
   }));
 
@@ -340,7 +352,7 @@ export function Dashboard() {
                                 onClick={(e) => {
                                   e.stopPropagation(); 
                                   setSelectedSiteId(p.raw_id);
-                                  setUpdateForm({ stage: p.stage_status, progress: p.progress });
+                                  setUpdateForm({ stage: p.stage_status });
                                   setIsModalOpen(true);
                                 }}
                                 className="px-3 py-1.5 bg-blue-50 text-blue-600 hover:bg-blue-100 hover:text-blue-800 rounded-lg text-xs font-bold transition-colors"
@@ -421,44 +433,28 @@ export function Dashboard() {
             <div className="p-6 space-y-5">
               <div>
                 <label className="block text-xs font-bold text-neutral-500 uppercase mb-2">
-                  Construction Stage
+                  Construction Phase
                 </label>
                 <select
                   value={updateForm.stage}
-                  onChange={(e) => setUpdateForm({ ...updateForm, stage: e.target.value })}
-                  className="w-full p-3 border border-neutral-300 rounded-lg text-sm bg-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                  onChange={(e) => setUpdateForm({ stage: e.target.value })}
+                  className="w-full p-3 border border-neutral-300 rounded-lg text-sm bg-white focus:ring-2 focus:ring-emerald-500 outline-none font-medium text-neutral-900"
                 >
-                  <option value="Pre-construction">Pre-construction</option>
-                  <option value="Foundation">Foundation</option>
-                  <option value="Framing">Framing</option>
-                  <option value="MEP">MEP (Mechanical, Electrical, Plumbing)</option>
+                  <option value="Pre Construction">Pre Construction</option>
+                  <option value="Mid Construction">Mid Construction</option>
                   <option value="Finishing">Finishing</option>
-                  <option value="Turnover">Turnover / Completed</option>
+                  <option value="Post Construction">Post Construction</option>
                 </select>
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-neutral-500 uppercase mb-2 flex justify-between">
-                  <span>Overall Progress</span>
-                  <span className="text-emerald-600">{updateForm.progress}%</span>
-                </label>
-                <div className="flex items-center gap-4">
-                  <input
-                    type="range"
-                    min="0"
-                    max="100"
-                    value={updateForm.progress}
-                    onChange={(e) => setUpdateForm({ ...updateForm, progress: parseInt(e.target.value) || 0 })}
-                    className="w-full accent-emerald-600 h-2 bg-neutral-200 rounded-lg appearance-none cursor-pointer"
-                  />
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    value={updateForm.progress}
-                    onChange={(e) => setUpdateForm({ ...updateForm, progress: parseInt(e.target.value) || 0 })}
-                    className="w-20 p-2 border border-neutral-300 rounded-lg text-sm text-center focus:ring-2 focus:ring-emerald-500 outline-none"
-                  />
+              {/* Updated Logical Fix info banner */}
+              <div className="bg-blue-50 border border-blue-200 p-4 rounded-lg flex items-start gap-3">
+                <Building2 className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-xs font-bold text-blue-900 uppercase">Automated Progress Tracking</p>
+                  <p className="text-xs text-blue-700 mt-0.5">
+                    Project completion percentages are now mapped directly to the selected construction phase. This prevents logical discrepancies in the ledger database.
+                  </p>
                 </div>
               </div>
             </div>

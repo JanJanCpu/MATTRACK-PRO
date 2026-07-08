@@ -94,6 +94,9 @@ class SiteProgressUpdate(BaseModel):
     stage_status: str
     progress_percentage: int
 
+class ProjectStatusUpdate(BaseModel):
+    stage_status: str
+
 class SiteResponse(BaseModel):
     id: int
     site_name: str
@@ -126,9 +129,13 @@ class InventoryCreate(InventoryBase):
 class InventoryResponse(InventoryBase):
     id: int
     updated_at: datetime 
+    baseline_quantity: float
     
     class Config:
         from_attributes = True
+
+class InventoryStatusOverride(BaseModel):
+    status: str 
 
 # --- SUPPLIER MATERIALS ---
 class SupplierMaterialBase(BaseModel):
@@ -145,6 +152,13 @@ class SupplierMaterialCreate(BaseModel):
 class SupplierMaterialResponse(SupplierMaterialBase):
     id: int
     supplier_id: int
+    
+    # --- NEW: Added fields so Pydantic allows the data to reach the frontend ---
+    brand: Optional[str] = "Generic/No Brand"
+    quantity: Optional[float] = 0.0
+    unit: Optional[str] = "Pcs"
+    # -------------------------------------------------------------------------
+
     class Config:
         from_attributes = True
 

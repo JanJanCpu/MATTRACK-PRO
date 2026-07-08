@@ -5,10 +5,12 @@ export function SellerOrders() {
   const [orders, setOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
+  const baseUrl = `http://${window.location.hostname}:8000`;
+
   const fetchOrders = async () => {
     const token = localStorage.getItem("token");
     try {
-      const response = await fetch("http://localhost:8000/seller/orders", {
+      const response = await fetch(`${baseUrl}/seller/orders`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (response.ok) {
@@ -30,7 +32,7 @@ export function SellerOrders() {
     const token = localStorage.getItem("token");
     try {
       const response = await fetch(
-        `http://localhost:8000/seller/orders/${orderId}/status`,
+        `${baseUrl}/seller/orders/${orderId}/status`,
         {
           method: "PATCH",
           headers: {
@@ -42,7 +44,6 @@ export function SellerOrders() {
       );
 
       if (response.ok) {
-        // Refresh the list to show the new status
         fetchOrders();
       }
     } catch (error) {
@@ -58,6 +59,7 @@ export function SellerOrders() {
         return "bg-blue-100 text-blue-800 border-blue-200";
       case "Shipped":
         return "bg-purple-100 text-purple-800 border-purple-200";
+      case "Received":
       case "Delivered":
         return "bg-emerald-100 text-emerald-800 border-emerald-200";
       case "Cancelled":
@@ -169,15 +171,17 @@ export function SellerOrders() {
                         </button>
                       )}
 
+                      {/* --- SECURITY FIX: Seller can no longer force a delivery confirmation --- */}
                       {order.status === "Shipped" && (
-                        <button
-                          onClick={() =>
-                            updateOrderStatus(order.id, "Delivered")
-                          }
-                          className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 text-white text-sm font-bold rounded-lg hover:bg-emerald-700 transition"
-                        >
-                          <CheckCircle className="w-4 h-4" /> Confirm Delivery
-                        </button>
+                        <div className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 text-emerald-700 text-xs font-bold rounded-lg border border-emerald-200">
+                          <Truck className="w-4 h-4" /> In Transit (Awaiting Site Confirmation)
+                        </div>
+                      )}
+
+                      {(order.status === "Received" || order.status === "Delivered") && (
+                        <div className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 text-slate-600 text-xs font-bold rounded-lg border border-slate-200">
+                          <CheckCircle className="w-4 h-4" /> Order Complete
+                        </div>
                       )}
                     </div>
                   </div>

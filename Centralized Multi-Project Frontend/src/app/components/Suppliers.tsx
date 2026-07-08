@@ -15,6 +15,10 @@ import {
   Loader,
   ShieldAlert,
   X,
+  Key,
+  Copy,
+  Check,
+  UserPlus
 } from "lucide-react";
 import {
   MapContainer,
@@ -30,9 +34,10 @@ import {
   suppliersAPI,
   geocodeAddress,
   sitesAPI,
-  requestsAPI,
 } from "../../services/apiService";
 import type { Supplier } from "../../types";
+
+const BASE_URL = `http://${window.location.hostname}:8000`;
 
 // Leaflet Icon Fix
 const defaultIcon = new L.Icon({
@@ -74,17 +79,12 @@ export function Suppliers() {
   const [showForm, setShowForm] = useState(false);
   const [ratingEditId, setRatingEditId] = useState<number | null>(null);
 
-  // --- NEW: RBAC State ---
   const [userRole, setUserRole] = useState("staff");
 
   // --- CATALOG MODAL STATE ---
-  const [viewingCatalogFor, setViewingCatalogFor] = useState<Supplier | null>(
-    null,
-  );
+  const [viewingCatalogFor, setViewingCatalogFor] = useState<Supplier | null>(null);
   const [catalogItems, setCatalogItems] = useState<any[]>([]);
   const [loadingCatalog, setLoadingCatalog] = useState(false);
-
-  // ⚡ NEW: Search State
   const [catalogSearch, setCatalogSearch] = useState("");
 
   // --- PURCHASE ORDER STATE ---
@@ -93,10 +93,66 @@ export function Suppliers() {
   const [poForm, setPoForm] = useState({ site_id: "", quantity: 1 });
   const [userSiteId, setUserSiteId] = useState<string | null>(null);
 
+  // --- VENDOR CREDENTIAL GENERATOR STATE ---
+  const [managingCredsFor, setManagingCredsFor] = useState<Supplier | null>(null);
+  const [credForm, setCredForm] = useState({ username: "", email: "", password: "Pentabuild2026!" });
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const handleOpenCredModal = (supplier: Supplier) => {
+    const cleanSlug = supplier.name.toLowerCase().replace(/[^a-z0-9]/g, "");
+    setManagingCredsFor(supplier);
+    setCredForm({
+      username: `${cleanSlug}_seller`,
+      email: `${cleanSlug}@pentabuild-portal.com`,
+      password: "Pentabuild2026!"
+    });
+    setCopied(false);
+  };
+
+  const handleGenerateCredentials = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!managingCredsFor) return;
+    setIsGenerating(true);
+
+    try {
+      const response = await fetch(`${BASE_URL}/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: credForm.username.trim(),
+          email: credForm.email.trim(),
+          password: credForm.password,
+          role: "seller",
+          company_name: managingCredsFor.name,
+          supplier_id: managingCredsFor.id
+        })
+      });
+
+      if (response.ok) {
+        alert(`✅ Portal Credentials Generated Successfully!\n\nVendor can now log into the Seller Dashboard using username: "${credForm.username}".`);
+        setManagingCredsFor(null);
+      } else {
+        const errData = await response.json();
+        alert(`Failed to create account: ${errData.detail || "Username may already be registered."}`);
+      }
+    } catch (err) {
+      alert("Network Error: Could not connect to authentication server.");
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const copyCredentials = () => {
+    const text = `Pentabuild Seller Portal Login:\nURL: http://${window.location.host}/login\nUsername: ${credForm.username}\nPassword: ${credForm.password}`;
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 3000);
+  };
+
   const handleConfirmPO = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      // Logic: If PM, use their hidden token site ID. If Admin, use the dropdown selection.
       const finalSiteId =
         userRole === "pm" || userRole === "staff" ? userSiteId : poForm.site_id;
 
@@ -105,34 +161,52 @@ export function Suppliers() {
         return;
       }
 
-      await requestsAPI.create({
+      const token = localStorage.getItem("token");
+      
+      const payload = {
+        supplier_id: draftingPOFor.supplier_id,
         site_id: Number(finalSiteId),
-        item_name: draftingPOFor.material_name,
-        quantity: poForm.quantity,
-        status: "Pending",
-        // Force the type to bypass TypeScript strictness for the demo
-      } as any);
+        material_name: draftingPOFor.material_name,
+        quantity: Number(poForm.quantity),
+        total_price: Number(poForm.quantity) * Number(draftingPOFor.price)
+      };
+
+      const response = await fetch(`${BASE_URL}/inventory/purchase-orders`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || "Failed to submit Purchase Order");
+      }
 
       alert(
-        `✅ Success! Order for ${poForm.quantity}x ${draftingPOFor.material_name} has been sent to the procurement queue.`,
+        `✅ Success! Order for ${poForm.quantity}x ${draftingPOFor.material_name} has been sent to the supplier.`
       );
-      setDraftingPOFor(null); // Close the PO modal
-    } catch (err) {
-      alert("Failed to submit Purchase Order.");
+      setDraftingPOFor(null);
+      setPoForm(prev => ({ ...prev, quantity: 1 }));
+    } catch (err: any) {
+      console.error("API call failed:", err);
+      alert(`Failed to submit Purchase Order: ${err.message}`);
     }
   };
 
   const handleViewCatalog = async (supplier: Supplier) => {
     setViewingCatalogFor(supplier);
     setLoadingCatalog(true);
-    setCatalogSearch(""); // Reset search when opening a new catalog
+    setCatalogSearch("");
     try {
       const token = localStorage.getItem("token");
       const headers: any = { "Content-Type": "application/json" };
       if (token) headers["Authorization"] = `Bearer ${token}`;
 
       const response = await fetch(
-        `http://${window.location.hostname}:8000/suppliers/${supplier.id}/catalog`,
+        `${BASE_URL}/suppliers/${supplier.id}/catalog`,
         { headers },
       );
 
@@ -150,21 +224,17 @@ export function Suppliers() {
     }
   };
 
-  // ⚡ NEW: Filter Logic (Runs automatically as you type)
   const filteredCatalog = catalogItems.filter((item) =>
     item.material_name.toLowerCase().includes(catalogSearch.toLowerCase()),
   );
 
-  // Map & Form State
   const [formData, setFormData] = useState({
     name: "",
     contact: "",
     address: "",
     rating: 3,
-  }); // Set default rating as number 3
-  const [position, setPosition] = useState<[number, number]>([
-    14.5995, 121.0366,
-  ]); // Default Manila
+  });
+  const [position, setPosition] = useState<[number, number]>([14.5995, 121.0366]);
   const [isSearching, setIsSearching] = useState(false);
 
   const loadSuppliers = async () => {
@@ -187,38 +257,26 @@ export function Suppliers() {
         const role = payload.role ? payload.role.toLowerCase() : "staff";
         setUserRole(role);
 
-        // ⚡ NEW: Grab the PM's specific site_id from their token
         if (payload.site_id) setUserSiteId(payload.site_id.toString());
 
-        // ⚡ NEW: If they are an Admin, load all sites for the dropdown
         if (["admin", "owner"].includes(role)) {
           sitesAPI
             .list()
             .then((data) => {
               if (data && data.length > 0) {
                 setSites(data);
-                setPoForm((prev) => ({
-                  ...prev,
-                  site_id: data[0].id.toString(),
-                }));
               } else {
-                // ⚡ SAFETY NET: If database has 0 sites, inject a mock site!
-                console.log("DEBUG: Database empty. Using fallback site.");
                 const fallbackSite = [
                   { id: 999, name: "PENTABUILD Main HQ (Demo Site)" },
                 ];
                 setSites(fallbackSite);
-                setPoForm((prev) => ({ ...prev, site_id: "999" }));
               }
             })
-            .catch((err) => {
-              // ⚡ SAFETY NET: If the API crashes, still show the mock site!
-              console.error("DEBUG: API Failed. Using fallback site.");
+            .catch(() => {
               const fallbackSite = [
                 { id: 999, name: "PENTABUILD Main HQ (Demo Site)" },
               ];
               setSites(fallbackSite);
-              setPoForm((prev) => ({ ...prev, site_id: "999" }));
             });
         }
       } catch (e) {
@@ -262,9 +320,7 @@ export function Suppliers() {
       setShowForm(false);
       loadSuppliers();
     } catch (err) {
-      alert(
-        "Failed to save supplier data. Please check the console for details.",
-      );
+      alert("Failed to save supplier data.");
     }
   };
 
@@ -289,7 +345,7 @@ export function Suppliers() {
       await suppliersAPI.delete(id);
       loadSuppliers();
     } catch (err) {
-      alert("Failed to delete supplier. Please check the console.");
+      alert("Failed to delete supplier.");
     }
   };
 
@@ -302,7 +358,9 @@ export function Suppliers() {
   });
 
   return (
-    <div className="space-y-6 animate-in fade-in duration-500">
+    <div className="space-y-6 animate-in fade-in duration-500 max-w-6xl mx-auto">
+      
+      {/* --- SUPPLIER DIRECTORY HEADER --- */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-neutral-900">
@@ -312,7 +370,6 @@ export function Suppliers() {
             Manage unlisted local hardware stores and material catalogs.
           </p>
         </div>
-        {/* --- FIXED: Hide the Add Button if User is Staff --- */}
         {["admin", "owner"].includes(userRole) && (
           <button
             onClick={() => setShowForm(!showForm)}
@@ -329,6 +386,7 @@ export function Suppliers() {
         )}
       </div>
 
+      {/* --- ADD SUPPLIER FORM --- */}
       {showForm && ["admin", "owner"].includes(userRole) && (
         <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm animate-in slide-in-from-top-4">
           <form
@@ -345,8 +403,8 @@ export function Suppliers() {
                 onChange={(e) =>
                   setFormData({ ...formData, name: e.target.value })
                 }
-                className="w-full p-2 border rounded-lg text-sm bg-neutral-50 focus:ring-2 focus:ring-slate-900 outline-none"
-                placeholder="e.g. Kuya Boy Hardware (or Pentabuild Internal)"
+                className="w-full p-2 border rounded-lg text-sm bg-neutral-50 focus:ring-2 focus:ring-slate-900 outline-none font-medium"
+                placeholder="e.g. Kuya Boy Hardware"
               />
             </div>
             <div className="md:col-span-2">
@@ -359,7 +417,7 @@ export function Suppliers() {
                 onChange={(e) =>
                   setFormData({ ...formData, contact: e.target.value })
                 }
-                className="w-full p-2 border rounded-lg text-sm bg-neutral-50 focus:ring-2 focus:ring-slate-900 outline-none"
+                className="w-full p-2 border rounded-lg text-sm bg-neutral-50 focus:ring-2 focus:ring-slate-900 outline-none font-medium"
                 placeholder="e.g. 0917-123-4567"
               />
             </div>
@@ -375,13 +433,13 @@ export function Suppliers() {
                   onChange={(e) =>
                     setFormData({ ...formData, address: e.target.value })
                   }
-                  className="w-full p-2 border rounded-lg text-sm bg-neutral-50 focus:ring-2 focus:ring-slate-900 outline-none"
+                  className="w-full p-2 border rounded-lg text-sm bg-neutral-50 focus:ring-2 focus:ring-slate-900 outline-none font-medium"
                   placeholder="e.g. 123 Main St, Caloocan"
                 />
                 <button
                   onClick={handleAddressSearch}
                   disabled={isSearching}
-                  className="px-4 bg-slate-900 text-white rounded-lg flex items-center justify-center gap-2 hover:bg-slate-800 disabled:opacity-70 transition-colors shrink-0"
+                  className="px-4 bg-slate-900 text-white font-bold rounded-lg flex items-center justify-center gap-2 hover:bg-slate-800 disabled:opacity-70 transition-colors shrink-0"
                 >
                   {isSearching ? (
                     <Loader className="w-4 h-4 animate-spin" />
@@ -413,10 +471,8 @@ export function Suppliers() {
                   <MapUpdater position={position} />
                 </MapContainer>
               </div>
-              <p className="text-xs text-neutral-400 mt-2 flex items-center gap-1">
-                <MapPin className="w-3 h-3" /> Tip: You can click the map to
-                manually adjust the exact pin location if the address search is
-                slightly off.
+              <p className="text-xs text-neutral-400 mt-2 flex items-center gap-1 font-medium">
+                <MapPin className="w-3 h-3" /> Tip: You can click the map to manually adjust the exact pin location.
               </p>
             </div>
 
@@ -430,39 +486,30 @@ export function Suppliers() {
         </div>
       )}
 
-      {/* --- FIXED: Staff Read-Only Notice --- */}
       {userRole === "staff" && (
         <div className="bg-blue-50 border border-blue-200 text-blue-800 p-4 rounded-xl flex items-center gap-3 text-sm">
           <ShieldAlert className="w-5 h-5 text-blue-600 shrink-0" />
           <p>
-            <strong>Procurement View Only:</strong> You are viewing the
-            authorized supplier network. If you need to add a new unlisted
-            vendor to the database, please contact the Pentabuild System
-            Administrator.
+            <strong>Procurement View Only:</strong> You are viewing the authorized supplier network. Contact a Pentabuild Administrator to register a new vendor or manage portal access credentials.
           </p>
         </div>
       )}
 
+      {/* --- SUPPLIER TABLE --- */}
       <div className="bg-white border border-neutral-200 rounded-xl shadow-sm overflow-hidden">
         <table className="w-full text-left text-sm whitespace-nowrap">
           <thead className="bg-neutral-50 text-neutral-500 border-b border-neutral-200">
             <tr>
               <th className="px-5 py-4 font-medium">Store & Contact</th>
               <th className="px-5 py-4 font-medium">Location</th>
-              <th className="px-5 py-4 font-medium text-center">
-                Quality Rating
-              </th>
-              {/* Hide the Action Column Header if they are staff */}
-
+              <th className="px-5 py-4 font-medium text-center">Quality Rating</th>
               <th className="px-5 py-4 font-medium text-right">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-neutral-100">
             {sortedSuppliers.length > 0 ? (
               sortedSuppliers.map((sup: any) => {
-                const isMotherStore = sup.name
-                  .toLowerCase()
-                  .includes("pentabuild");
+                const isMotherStore = sup.name.toLowerCase().includes("pentabuild");
 
                 return (
                   <tr
@@ -489,14 +536,14 @@ export function Suppliers() {
                               </span>
                             )}
                           </div>
-                          <div className="text-xs text-neutral-500 flex items-center gap-1 mt-0.5">
+                          <div className="text-xs text-neutral-500 flex items-center gap-1 mt-0.5 font-medium">
                             <Phone className="w-3 h-3" /> {sup.contact}
                           </div>
                         </div>
                       </div>
                     </td>
                     <td className="px-5 py-4 text-neutral-600 text-xs">
-                      <div className="flex items-center gap-1">
+                      <div className="flex items-center gap-1 font-medium">
                         <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
                         <span className="truncate max-w-[200px]">
                           {sup.address || "Location Unspecified"}
@@ -539,7 +586,6 @@ export function Suppliers() {
                       )}
                     </td>
 
-                    {/* --- ⚡ NEW ACTIONS COLUMN --- */}
                     <td className="px-5 py-4 text-right">
                       <div className="flex justify-end gap-2">
                         <button
@@ -548,6 +594,18 @@ export function Suppliers() {
                         >
                           <PackageOpen className="w-3.5 h-3.5" /> Catalog
                         </button>
+
+                        {/* --- VENDOR CREDENTIAL BUTTON --- */}
+                        {["admin", "owner"].includes(userRole) && !isMotherStore && (
+                          <button
+                            onClick={() => handleOpenCredModal(sup)}
+                            className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg transition-colors flex items-center gap-1.5 text-xs font-bold border border-indigo-200"
+                            title="Generate/Manage Seller Portal Credentials"
+                          >
+                            <Key className="w-3.5 h-3.5" /> Portal Access
+                          </button>
+                        )}
+
                         {["admin", "owner"].includes(userRole) && (
                           <button
                             onClick={() => handleDelete(sup.id, sup.name)}
@@ -563,7 +621,7 @@ export function Suppliers() {
               })
             ) : (
               <tr>
-                <td colSpan={4} className="p-12 text-center text-neutral-400">
+                <td colSpan={4} className="p-12 text-center text-neutral-400 font-medium">
                   No crowdsourced suppliers found.
                 </td>
               </tr>
@@ -571,7 +629,8 @@ export function Suppliers() {
           </tbody>
         </table>
       </div>
-      {/* --- SUPPLIER CATALOG MODAL (PORTALED) --- from Direct PO modal turn */}
+
+      {/* --- SUPPLIER CATALOG MODAL --- */}
       {viewingCatalogFor &&
         createPortal(
           <div className="fixed inset-0 bg-black/60 z-[9999] flex items-center justify-center p-4 animate-in fade-in">
@@ -588,7 +647,6 @@ export function Suppliers() {
                 </button>
               </div>
 
-              {/* ⚡ SEARCH BAR from Catalog Search Bar turn */}
               {!loadingCatalog && catalogItems.length > 0 && (
                 <div className="bg-white p-3 border-b border-neutral-200 shrink-0">
                   <div className="relative">
@@ -598,7 +656,7 @@ export function Suppliers() {
                       placeholder="Search catalog materials..."
                       value={catalogSearch}
                       onChange={(e) => setCatalogSearch(e.target.value)}
-                      className="w-full pl-9 pr-4 py-2 text-sm bg-neutral-50 border border-neutral-200 rounded-lg focus:bg-white focus:border-blue-500 outline-none transition-all"
+                      className="w-full pl-9 pr-4 py-2 text-sm bg-neutral-50 border border-neutral-200 rounded-lg focus:bg-white focus:border-blue-500 outline-none font-medium transition-all"
                     />
                   </div>
                 </div>
@@ -611,27 +669,16 @@ export function Suppliers() {
                   </div>
                 ) : catalogItems.length > 0 ? (
                   <table className="w-full text-left text-sm whitespace-nowrap bg-white">
-                    {/* ⚡ FIXED: Invalid DOM Nesting */}
                     <thead className="bg-neutral-50 text-neutral-500 border-b border-neutral-200 sticky top-0 shadow-sm">
                       <tr>
                         <th className="px-6 py-4 font-medium">Material</th>
-                        <th className="px-6 py-4 font-medium text-right">
-                          Price
-                        </th>
-                        <th className="px-6 py-4 font-medium text-center">
-                          Stock Level
-                        </th>
-                        <th className="px-6 py-4 font-medium text-center">
-                          Delivery Rating
-                        </th>
-                        {/* ⚡ Order header, properly nested inside tr */}
-                        <th className="px-6 py-4 font-medium text-right">
-                          Order
-                        </th>
+                        <th className="px-6 py-4 font-medium text-right">Price</th>
+                        <th className="px-6 py-4 font-medium text-center">Stock Level</th>
+                        <th className="px-6 py-4 font-medium text-center">Delivery Rating</th>
+                        <th className="px-6 py-4 font-medium text-right">Order</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-neutral-100">
-                      {/* ⚡ NOTE: Using filteredCatalog.map here! from Catalog Search Bar turn */}
                       {filteredCatalog.length > 0 ? (
                         filteredCatalog.map((item, i) => (
                           <tr key={i} className="hover:bg-neutral-50">
@@ -658,16 +705,15 @@ export function Suppliers() {
                               {item.delivery_rating}{" "}
                               <Star className="w-3 h-3" fill="currentColor" />
                             </td>
-
-                            {/* ⚡ Order button column from Direct PO modal turn */}
                             <td className="px-6 py-4 text-right">
                               <button
                                 onClick={() => {
                                   setDraftingPOFor(item);
-                                  setPoForm((prev) => ({
-                                    ...prev,
+                                  // FIX: Auto-select the first available site to prevent the blank dropdown box
+                                  setPoForm({
+                                    site_id: sites.length > 0 ? sites[0].id.toString() : "",
                                     quantity: 1,
-                                  }));
+                                  });
                                 }}
                                 className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-lg transition-colors inline-flex items-center justify-center gap-1.5 text-xs font-bold"
                               >
@@ -678,11 +724,7 @@ export function Suppliers() {
                         ))
                       ) : (
                         <tr>
-                          {/* ⚡ Set colSpan to 5 to cover all columns */}
-                          <td
-                            colSpan={5}
-                            className="py-12 text-center text-neutral-400"
-                          >
+                          <td colSpan={5} className="py-12 text-center text-neutral-400 font-medium">
                             No materials found matching "{catalogSearch}"
                           </td>
                         </tr>
@@ -690,7 +732,7 @@ export function Suppliers() {
                     </tbody>
                   </table>
                 ) : (
-                  <div className="py-12 text-center text-neutral-400">
+                  <div className="py-12 text-center text-neutral-400 font-medium">
                     <PackageOpen className="w-12 h-12 mx-auto mb-3 opacity-20" />
                     <p>No materials currently listed for this supplier.</p>
                   </div>
@@ -700,6 +742,7 @@ export function Suppliers() {
           </div>,
           document.body,
         )}
+
       {/* --- DRAFT PURCHASE ORDER MODAL --- */}
       {draftingPOFor &&
         createPortal(
@@ -713,12 +756,8 @@ export function Suppliers() {
 
               <form onSubmit={handleConfirmPO} className="p-5 space-y-4">
                 <div>
-                  <p className="text-xs text-neutral-500 font-bold uppercase">
-                    Material
-                  </p>
-                  <p className="font-bold text-neutral-900">
-                    {draftingPOFor.material_name}
-                  </p>
+                  <p className="text-xs text-neutral-500 font-bold uppercase">Material</p>
+                  <p className="font-bold text-neutral-900">{draftingPOFor.material_name}</p>
                   <p className="text-sm text-emerald-600 font-bold">
                     ₱{draftingPOFor.price.toFixed(2)} / unit
                   </p>
@@ -736,11 +775,10 @@ export function Suppliers() {
                     onChange={(e) =>
                       setPoForm({ ...poForm, quantity: Number(e.target.value) })
                     }
-                    className="w-full p-2 border rounded-lg text-sm bg-neutral-50 focus:ring-2 focus:ring-slate-900 outline-none"
+                    className="w-full p-2 border rounded-lg text-sm bg-neutral-50 focus:ring-2 focus:ring-slate-900 font-bold outline-none"
                   />
                 </div>
 
-                {/* ⚡ RBAC IN ACTION: Show dropdown for Admins, Auto-assign for PMs */}
                 {["admin", "owner"].includes(userRole) ? (
                   <div>
                     <label className="block text-xs font-bold text-neutral-500 uppercase mb-1">
@@ -752,23 +790,21 @@ export function Suppliers() {
                       onChange={(e) =>
                         setPoForm({ ...poForm, site_id: e.target.value })
                       }
-                      className="w-full p-2 border rounded-lg text-sm bg-neutral-50 text-neutral-900 focus:ring-2 focus:ring-slate-900 outline-none"
+                      className="w-full p-2 border rounded-lg text-sm bg-neutral-50 text-neutral-900 font-medium focus:ring-2 focus:ring-slate-900 outline-none"
                     >
+                      {/* FIX: Added a disabled placeholder option */}
+                      <option value="" disabled>-- Select Destination Site --</option>
                       {sites.map((site) => (
                         <option key={site.id} value={site.id}>
-                          {/* Access the correct column name from your models.py */}
                           {site.site_name}
                         </option>
                       ))}
                     </select>
                   </div>
                 ) : (
-                  <div className="bg-blue-50 text-blue-800 p-3 rounded-lg text-xs flex gap-2 items-center">
+                  <div className="bg-blue-50 text-blue-800 p-3 rounded-lg text-xs flex gap-2 items-center font-medium">
                     <CheckCircle2 className="w-4 h-4 text-blue-600 shrink-0" />
-                    <p>
-                      Order will be automatically routed to your assigned
-                      Project Site.
-                    </p>
+                    <p>Order will be automatically routed to your assigned Project Site.</p>
                   </div>
                 )}
 
@@ -782,7 +818,7 @@ export function Suppliers() {
                   </button>
                   <button
                     type="submit"
-                    className="flex-1 py-2 bg-emerald-600 text-white font-bold hover:bg-emerald-700 rounded-lg transition-colors"
+                    className="flex-1 py-2 bg-emerald-600 text-white font-bold hover:bg-emerald-700 rounded-lg transition-colors shadow-sm"
                   >
                     Confirm Order
                   </button>
@@ -791,6 +827,103 @@ export function Suppliers() {
             </div>
           </div>,
           document.body,
+        )}
+
+      {/* --- VENDOR CREDENTIAL GENERATOR MODAL --- */}
+      {managingCredsFor &&
+        createPortal(
+          <div className="fixed inset-0 bg-black/60 z-[10000] flex items-center justify-center p-4 animate-in fade-in">
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden">
+              <div className="p-5 border-b bg-indigo-50 border-indigo-100 flex justify-between items-center text-indigo-900">
+                <h2 className="text-base font-bold flex items-center gap-2">
+                  <Key className="w-5 h-5 text-indigo-600" /> Portal Access: {managingCredsFor.name}
+                </h2>
+                <button
+                  onClick={() => setManagingCredsFor(null)}
+                  className="p-1 hover:bg-indigo-200/50 rounded-md transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleGenerateCredentials} className="p-6 space-y-4">
+                <div className="bg-neutral-50 p-3.5 rounded-lg border border-neutral-200 text-xs text-neutral-600 space-y-1 font-medium">
+                  <p><strong>Seller Role Linkage:</strong> Generating accounts below directly links the vendor to Supplier ID #{managingCredsFor.id}.</p>
+                  <p>Vendors logging in with these credentials will gain exclusive access to the Seller Dashboard (`/seller/orders` & `/seller/materials`).</p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-neutral-500 uppercase mb-1">
+                    Portal Username
+                  </label>
+                  <input
+                    required
+                    value={credForm.username}
+                    onChange={(e) => setCredForm({ ...credForm, username: e.target.value })}
+                    className="w-full p-2.5 border rounded-lg text-sm bg-neutral-50 font-bold outline-none focus:ring-2 focus:ring-indigo-600"
+                    placeholder="e.g. kuyaboy_seller"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-neutral-500 uppercase mb-1">
+                    Notification Email
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    value={credForm.email}
+                    onChange={(e) => setCredForm({ ...credForm, email: e.target.value })}
+                    className="w-full p-2.5 border rounded-lg text-sm bg-neutral-50 font-medium outline-none focus:ring-2 focus:ring-indigo-600"
+                    placeholder="e.g. store@pentabuild-portal.com"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-neutral-500 uppercase mb-1 flex justify-between">
+                    <span>Initial Password</span>
+                    <span className="text-[10px] text-indigo-600 font-normal">Min. 8 chars</span>
+                  </label>
+                  <div className="relative">
+                    <input
+                      type="text"
+                      required
+                      value={credForm.password}
+                      onChange={(e) => setCredForm({ ...credForm, password: e.target.value })}
+                      className="w-full p-2.5 border rounded-lg text-sm font-mono font-bold bg-neutral-50 outline-none focus:ring-2 focus:ring-indigo-600 pr-24"
+                    />
+                    <button
+                      type="button"
+                      onClick={copyCredentials}
+                      className="absolute right-1.5 top-1.5 px-2.5 py-1 bg-white hover:bg-neutral-100 border text-neutral-700 rounded text-xs font-bold flex items-center gap-1 transition-colors shadow-2xs"
+                    >
+                      {copied ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                      {copied ? "Copied" : "Copy"}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="pt-3 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setManagingCredsFor(null)}
+                    className="flex-1 py-2.5 text-neutral-600 font-bold hover:bg-neutral-100 rounded-lg text-sm transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isGenerating}
+                    className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg text-sm shadow-sm transition-colors flex items-center justify-center gap-2"
+                  >
+                    {isGenerating ? <Loader className="w-4 h-4 animate-spin" /> : <UserPlus className="w-4 h-4" />}
+                    Create Portal Account
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>,
+          document.body
         )}
     </div>
   );

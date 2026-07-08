@@ -96,7 +96,7 @@ export function Layout() {
   const [globalInventory, setGlobalInventory] = useState<any[]>([]);
   const [globalSites, setGlobalSites] = useState<any[]>([]);
 
-  // --- NEW: Track the seller's inventory count ---
+  // --- Track the seller's inventory count ---
   const [sellerItemCount, setSellerItemCount] = useState(0);
 
   const location = useLocation();
@@ -125,13 +125,15 @@ export function Layout() {
         setNotifications(notifs);
 
         if (currentUserRole === "seller") {
+          // Dynamic hostname fix to prevent network trap crashes
+          const baseUrl = `http://${window.location.hostname}:8000`;
           const response = await fetch(
-            "http://localhost:8000/seller/materials",
+            `${baseUrl}/seller/materials`,
             {
               headers: {
                 Authorization: `Bearer ${localStorage.getItem("token")}`,
               },
-            },
+            }
           );
           if (response.ok) {
             const data = await response.json();
@@ -147,10 +149,10 @@ export function Layout() {
 
           if (currentUserRole === "staff" && currentUserId) {
             const assignedSite = sitesData.find(
-              (site) => site.manager_id === currentUserId,
+              (site) => site.manager_id === currentUserId
             );
             setPmSiteName(
-              assignedSite ? assignedSite.site_name : "Unassigned User",
+              assignedSite ? assignedSite.site_name : "Unassigned User"
             );
           }
         }
@@ -179,14 +181,14 @@ export function Layout() {
     e: React.MouseEvent,
     id: number,
     link?: string,
-    isRead?: boolean,
+    isRead?: boolean
   ) => {
     e.stopPropagation();
     try {
       if (!isRead) {
         await notificationsAPI.markAsRead(id);
         setNotifications((prev) =>
-          prev.map((n) => (n.id === id ? { ...n, is_read: true } : n)),
+          prev.map((n) => (n.id === id ? { ...n, is_read: true } : n))
         );
       }
 
@@ -212,7 +214,7 @@ export function Layout() {
   };
 
   const filteredNavItems = navItems.filter((item) =>
-    item.allowedRoles.includes(userRole),
+    item.allowedRoles.includes(userRole)
   );
 
   const searchResults =
@@ -221,7 +223,7 @@ export function Layout() {
       : globalInventory.filter(
           (item) =>
             item.item_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-            item.brand.toLowerCase().includes(searchQuery.toLowerCase()),
+            item.brand.toLowerCase().includes(searchQuery.toLowerCase())
         );
 
   const unreadCount = notifications.filter((n) => !n.is_read).length;
@@ -281,7 +283,7 @@ export function Layout() {
                   {item.name}
                 </div>
 
-                {/* --- NEW: The Badge specifically for the seller catalog --- */}
+                {/* --- The Badge specifically for the seller catalog --- */}
                 {item.name === "My Catalog" && userRole === "seller" && (
                   <span className="bg-blue-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">
                     {sellerItemCount}
@@ -323,102 +325,103 @@ export function Layout() {
               <Menu className="w-5 h-5" />
             </button>
 
-            <div className="hidden md:flex items-center relative group">
-              <Search className="w-4 h-4 absolute left-3 text-neutral-400" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search materials, tools, or brands..."
-                className="pl-9 pr-4 py-2 w-[400px] text-sm bg-neutral-100 border border-transparent rounded-full focus:bg-white focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 transition-all outline-none"
-              />
+            {/* --- SECURITY FIX: Hide Internal Data Search from Sellers --- */}
+            {userRole !== "seller" && (
+              <div className="hidden md:flex items-center relative group">
+                <Search className="w-4 h-4 absolute left-3 text-neutral-400" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search materials, tools, or brands..."
+                  className="pl-9 pr-4 py-2 w-[400px] text-sm bg-neutral-100 border border-transparent rounded-full focus:bg-white focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 transition-all outline-none"
+                />
 
-              {searchQuery && (
-                <div className="absolute top-full left-0 mt-2 w-[500px] bg-white border border-neutral-200 rounded-xl shadow-2xl py-2 max-h-[450px] overflow-y-auto z-50">
-                  <div className="px-4 py-2 text-[10px] font-bold text-neutral-400 uppercase tracking-wider border-b border-neutral-100">
-                    Network Inventory Results
-                  </div>
-
-                  {searchResults.length > 0 ? (
-                    searchResults.map((item) => {
-                      const site = globalSites.find(
-                        (s) => s.id === item.site_id,
-                      );
-
-                      return (
-                        <div
-                          key={item.id}
-                          className="px-4 py-3 hover:bg-neutral-50 border-b border-neutral-50 flex items-center justify-between group cursor-default"
-                        >
-                          <div className="flex items-center gap-3">
-                            <div className="p-2 bg-slate-100 rounded-lg text-slate-500">
-                              <Package className="w-4 h-4" />
-                            </div>
-                            <div>
-                              <div className="font-bold text-neutral-900 text-sm">
-                                {item.item_name}
-                              </div>
-                              <div className="text-xs text-neutral-500">
-                                {item.brand} •{" "}
-                                <span className="text-emerald-600 font-medium">
-                                  {site?.site_name || "Unknown Site"}
-                                </span>
-                              </div>
-                            </div>
-                          </div>
-
-                          <div className="flex items-center gap-4">
-                            <div className="text-right">
-                              <div className="font-black text-neutral-900 text-sm">
-                                {item.quantity}{" "}
-                                <span className="text-xs font-normal text-neutral-500">
-                                  {item.unit}
-                                </span>
-                              </div>
-                              <div
-                                className={`text-[10px] font-bold uppercase ${item.status === "Critical" ? "text-red-500" : "text-emerald-500"}`}
-                              >
-                                {item.status}
-                              </div>
-                            </div>
-
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setSearchQuery("");
-                                navigate("/suppliers");
-                              }}
-                              className="p-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-600 hover:text-white transition-colors"
-                              title="Procure More"
-                            >
-                              <ShoppingCart className="w-4 h-4" />
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })
-                  ) : (
-                    <div className="px-4 py-8 text-center text-sm text-neutral-500">
-                      No stock found for "{searchQuery}".
-                      <button
-                        onClick={() => {
-                          setSearchQuery("");
-                          navigate("/suppliers");
-                        }}
-                        className="block mx-auto mt-2 text-emerald-600 font-medium hover:underline flex items-center justify-center gap-1"
-                      >
-                        <Search className="w-3 h-3" /> Find in Global Suppliers
-                        Network
-                      </button>
+                {searchQuery && (
+                  <div className="absolute top-full left-0 mt-2 w-[500px] bg-white border border-neutral-200 rounded-xl shadow-2xl py-2 max-h-[450px] overflow-y-auto z-50">
+                    <div className="px-4 py-2 text-[10px] font-bold text-neutral-400 uppercase tracking-wider border-b border-neutral-100">
+                      Network Inventory Results
                     </div>
-                  )}
-                </div>
-              )}
-            </div>
+
+                    {searchResults.length > 0 ? (
+                      searchResults.map((item) => {
+                        const site = globalSites.find(
+                          (s) => s.id === item.site_id
+                        );
+
+                        return (
+                          <div
+                            key={item.id}
+                            className="px-4 py-3 hover:bg-neutral-50 border-b border-neutral-50 flex items-center justify-between group cursor-default"
+                          >
+                            <div className="flex items-center gap-3">
+                              <div className="p-2 bg-slate-100 rounded-lg text-slate-500">
+                                <Package className="w-4 h-4" />
+                              </div>
+                              <div>
+                                <div className="font-bold text-neutral-900 text-sm">
+                                  {item.item_name}
+                                </div>
+                                <div className="text-xs text-neutral-500">
+                                  {item.brand} •{" "}
+                                  <span className="text-emerald-600 font-medium">
+                                    {site?.site_name || "Unknown Site"}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-4">
+                              <div className="text-right">
+                                <div className="font-black text-neutral-900 text-sm">
+                                  {item.quantity}{" "}
+                                  <span className="text-xs font-normal text-neutral-500">
+                                    {item.unit}
+                                  </span>
+                                </div>
+                                <div
+                                  className={`text-[10px] font-bold uppercase ${item.status === "Critical" ? "text-red-500" : "text-emerald-500"}`}
+                                >
+                                  {item.status}
+                                </div>
+                              </div>
+
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSearchQuery("");
+                                  navigate("/suppliers");
+                                }}
+                                className="p-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-600 hover:text-white transition-colors"
+                                title="Procure More"
+                              >
+                                <ShoppingCart className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <div className="px-4 py-8 text-center text-sm text-neutral-500">
+                        No stock found for "{searchQuery}".
+                        <button
+                          onClick={() => {
+                            setSearchQuery("");
+                            navigate("/suppliers");
+                          }}
+                          className="block mx-auto mt-2 text-emerald-600 font-medium hover:underline flex items-center justify-center gap-1"
+                        >
+                          <Search className="w-3 h-3" /> Find in Global Suppliers Network
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="flex items-center gap-4">
-            {/* --- NEW: Updated Context Badge --- */}
             <div className="hidden lg:flex items-center gap-2 px-3 py-1.5 bg-slate-100 border border-slate-200 rounded-full text-xs font-bold text-slate-700">
               {userRole === "staff" && pmSiteName ? (
                 <>
@@ -480,7 +483,7 @@ export function Layout() {
                               e,
                               notif.id,
                               notif.link,
-                              notif.is_read,
+                              notif.is_read
                             )
                           }
                           className={`p-4 border-b border-neutral-100 transition-colors cursor-pointer flex items-start gap-3

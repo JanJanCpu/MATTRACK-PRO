@@ -92,7 +92,7 @@ export const sitesAPI = {
     address?: string;
     lat: number;
     lon: number;
-    manager_id: number;
+    manager_id?: number;
   }) =>
     fetchAPI<ProjectSite>(`${BASE_URL}/sites/`, {
       method: "POST",
@@ -101,14 +101,10 @@ export const sitesAPI = {
 
   list: () => fetchAPI<ProjectSite[]>(`${BASE_URL}/sites/`),
 
-  updateProgress: (
-    id: number,
-    stage_status: string,
-    progress_percentage: number,
-  ) =>
-    fetchAPI<ProjectSite>(`${BASE_URL}/sites/${id}/progress`, {
+  updateStatus: (id: number, stage_status: string) =>
+    fetchAPI<ProjectSite>(`${BASE_URL}/sites/${id}/status`, {
       method: "PATCH",
-      body: JSON.stringify({ stage_status, progress_percentage }),
+      body: JSON.stringify({ stage_status }),
     }),
 };
 
@@ -128,6 +124,12 @@ export const inventoryAPI = {
     fetchAPI(`${BASE_URL}/inventory/log`, {
       method: "POST",
       body: JSON.stringify(data),
+    }),
+
+  overrideStatus: (id: number, status: string) =>
+    fetchAPI(`${BASE_URL}/inventory/${id}/flag`, {
+      method: "PATCH",
+      body: JSON.stringify({ status }),
     }),
 
   getLogs: () => fetchAPI<any[]>(`${BASE_URL}/inventory/audit-logs/`),
@@ -203,7 +205,7 @@ export const advisoryAPI = {
   chat: (prompt: string, history: { role: string; content: string }[]) =>
     fetchAPI<any>(`${BASE_URL}/advisory/chat`, {
       method: "POST",
-      body: JSON.stringify({ prompt, history }),
+      body: JSON.stringify({ message: prompt, context: { history } }),
     }),
 };
 

@@ -10,13 +10,11 @@ import {
   ShieldCheck,
   Trash2,
   Activity,
+  HelpCircle
 } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { transferAPI } from "../../services/apiService";
 
-// --- INLINED API SERVICE ---
-// By inlining the API calls here, we avoid relative import compilation errors
-// and ensure the app dynamically targets your PC or Mobile Phone's IP address.
 const BASE_URL = `http://${window.location.hostname}:8000`;
 
 async function fetchAPI<T>(
@@ -64,13 +62,20 @@ const advisoryAPI = {
       body: JSON.stringify({ message }),
     }),
 };
-// ---------------------------
 
 interface ChatMessage {
   id: string;
   role: "user" | "ai";
   content: string;
 }
+
+// --- PANELIST FIX #2: Clickable FAQ Chips ---
+const FAQ_PROMPTS = [
+  "Where is our surplus Portland Cement located across all sites?",
+  "Draft a pull requisition for 100 pcs of 12mm Rebar.",
+  "Ano ang estimated market price ng buhangin (sand) ngayon?",
+  "Analyze current network shortages and recommend actions."
+];
 
 export function Advisory() {
   const location = useLocation();
@@ -82,7 +87,6 @@ export function Advisory() {
   const [userSites, setUserSites] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
 
-  // --- USER-ISOLATED CHAT MEMORY ---
   const token =
     localStorage.getItem("token") || localStorage.getItem("access_token");
   let currentUserId = "default";
@@ -108,7 +112,7 @@ export function Advisory() {
         id: "welcome",
         role: "ai",
         content:
-          "System Online. I am your MatTrack PRO Procurement Advisor. I am currently connected to your live PostgreSQL database. Click on an urgent item on the left, or ask me directly about our verified supplier options, pricing, or logistics.",
+          "System Online. I am your MatTrack PRO Logistics & Procurement Advisor. I accept English, Tagalog, or Taglish terminology (e.g., 'buhangin', 'kabilya'). Click an FAQ below or type a query to check surplus ledgers, external supplier ratings, or real-time hardware market baselines.",
       },
     ];
   });
@@ -117,12 +121,10 @@ export function Advisory() {
   const [isTyping, setIsTyping] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
-  // Auto-save chat
   useEffect(() => {
     localStorage.setItem(storageKey, JSON.stringify(messages));
   }, [messages, storageKey]);
 
-  // Auto-scroll chat to bottom
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isTyping]);
@@ -136,7 +138,6 @@ export function Advisory() {
           sitesAPI.list(),
         ]);
 
-        // Extract the user's assigned sites for AI Context
         const siteNames = sites.map((s) => s.site_name);
         setUserSites(siteNames);
 
@@ -168,7 +169,6 @@ export function Advisory() {
     const textToSend = overrideMessage || inputMessage;
     if (!textToSend.trim()) return;
 
-    // 1. Add User Message to UI
     const newUserMsg: ChatMessage = {
       id: Date.now().toString(),
       role: "user",
@@ -179,7 +179,6 @@ export function Advisory() {
     setIsTyping(true);
 
     try {
-      // --- THE CONTEXT & AMNESIA FIX ---
       const historyTranscript = messages
         .slice(-6)
         .map(
@@ -187,18 +186,15 @@ export function Advisory() {
         )
         .join("\n\n");
 
-      // We inject a hidden system command telling the AI what sites this user controls!
       const siteContext =
         userSites.length > 0
-          ? `[SYSTEM ALERT: The user sending this message manages the following project site(s): ${userSites.join(", ")}. If they ask to procure a material but don't mention a specific site, ASSUME it is for their assigned site and DO NOT ask them to specify one.]\n\n`
+          ? `[SYSTEM ALERT: The user sending this message manages the following project site(s): ${userSites.join(", ")}. If they ask to procure a material but don't mention a specific site, ASSUME it is for their assigned site.]\n\n`
           : "";
 
       const contextPayload = `${siteContext}--- RECENT CONVERSATION HISTORY ---\n${historyTranscript}\n\n--- CURRENT MESSAGE ---\nManager: ${textToSend}`;
 
-      // 2. Send the contextual payload to the Backend API
       const response = await advisoryAPI.askAI(contextPayload);
 
-      // 3. Add AI Response to UI
       setMessages((prev) => [
         ...prev,
         {
@@ -244,13 +240,11 @@ export function Advisory() {
     qty: string,
     unit: string,
   ) => {
-    // --- NEW: CONFIRMATION CHECK ---
     const isConfirmed = window.confirm(
       `SECURITY VERIFICATION:\n\nAre you sure you want to dispatch ${qty} ${unit} of ${item} from Site ${sourceId} to your location?`,
     );
 
     if (!isConfirmed) {
-      // If they click Cancel, tell the chat UI it was aborted
       setMessages((prev) => [
         ...prev,
         {
@@ -261,7 +255,6 @@ export function Advisory() {
       ]);
       return;
     }
-    // -------------------------------
 
     try {
       setIsTyping(true);
@@ -300,7 +293,7 @@ export function Advisory() {
           id: "reset",
           role: "ai",
           content:
-            "Session cleared. Neural context has been reset. How can I assist you with procurement today?",
+            "Session cleared. Neural context reset. I accept Taglish queries and real-time market sourcing. How can I assist?",
         },
       ];
       setMessages(resetMessage);
@@ -316,13 +309,11 @@ export function Advisory() {
           AI Advisory Engine
         </h1>
         <p className="text-sm text-neutral-500 mt-1">
-          Interactive enterprise chatbot powered by live inventory data and
-          crowdsourced supplier tracking.
+          Bilingual enterprise chatbot powered by live inventory data, supplier tracking, and market grounding.
         </p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 flex-1 min-h-0">
-        {/* LEFT COLUMN: Critical Shortages */}
         <div className="lg:col-span-1 flex flex-col bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
           <div className="p-4 border-b border-slate-200 bg-slate-50 flex items-center gap-2">
             <AlertTriangle className="w-5 h-5 text-amber-500" />
@@ -338,7 +329,7 @@ export function Advisory() {
               <div className="flex flex-col items-center justify-center text-center h-full space-y-2 opacity-70">
                 <CheckCircle className="w-8 h-8 text-emerald-500" />
                 <p className="text-sm font-medium text-emerald-800">
-                  All sites are healthy.
+                  All sites are optimal & in stock.
                 </p>
               </div>
             ) : (
@@ -380,28 +371,24 @@ export function Advisory() {
           </div>
         </div>
 
-        {/* RIGHT COLUMN: The Upgraded AI Chatbot Interface */}
         <div className="lg:col-span-2 flex flex-col bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden relative">
-          {/* Enterprise Status Bar */}
           <div className="px-5 py-3 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
             <div className="flex items-center gap-4 text-xs font-bold text-slate-600">
               <span className="flex items-center gap-1.5 text-emerald-600 bg-emerald-50 px-2 py-1 rounded border border-emerald-100">
                 <Database className="w-3.5 h-3.5" /> Live Data Sync: Active
               </span>
               <span className="flex items-center gap-1.5 text-indigo-600 bg-indigo-50 px-2 py-1 rounded border border-indigo-100">
-                <ShieldCheck className="w-3.5 h-3.5" /> Guardrails: Enabled
+                <ShieldCheck className="w-3.5 h-3.5" /> Taglish NLP: Enabled
               </span>
             </div>
             <button
               onClick={handleClearChat}
               className="flex items-center gap-1.5 text-slate-400 hover:text-red-500 transition-colors text-xs font-bold px-2 py-1 rounded hover:bg-red-50"
-              title="Wipe AI memory and clear chat history"
             >
               <Trash2 className="w-3.5 h-3.5" /> Clear Session
             </button>
           </div>
 
-          {/* Chat Messages Area */}
           <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-slate-50/50">
             {messages.map((msg) => (
               <div
@@ -422,7 +409,6 @@ export function Advisory() {
                   )}
                 </div>
 
-                {/* Analytical Bubble Styling */}
                 <div
                   className={`max-w-[85%] rounded-2xl px-5 py-3.5 text-sm shadow-sm whitespace-pre-wrap ${
                     msg.role === "user"
@@ -430,9 +416,7 @@ export function Advisory() {
                       : "bg-white border border-slate-200 text-slate-700 rounded-tl-none leading-relaxed font-medium"
                   }`}
                 >
-                  {/* --- SMART MESSAGE PARSER --- */}
                   {(() => {
-                    // Upgraded regex to catch: [TRANSFER: SiteID : ItemName : Brand : Qty : Unit]
                     const transferRegex =
                       /\[TRANSFER:\s*(\d+)\s*:\s*([^:]+)\s*:\s*([^:]+)\s*:\s*(\d+(?:\.\d+)?)\s*:\s*([^\]]+)\s*\]/;
                     const match = msg.content.match(transferRegex);
@@ -467,13 +451,10 @@ export function Advisory() {
                     }
                     return <span>{msg.content}</span>;
                   })()}
-                  {/* ---------------------------- */}
-                  {/* ---------------------------- */}
                 </div>
               </div>
             ))}
 
-            {/* Typing Indicator */}
             {isTyping && (
               <div className="flex gap-4">
                 <div className="w-8 h-8 rounded-full bg-emerald-100 text-emerald-600 border border-emerald-200 flex items-center justify-center shrink-0">
@@ -489,14 +470,30 @@ export function Advisory() {
             <div ref={chatEndRef} />
           </div>
 
-          {/* Chat Input Box */}
+          {/* PANELIST FIX #2: Clickable Quick Prompt FAQ Chips */}
+          <div className="px-4 py-2 bg-slate-100/80 border-t border-slate-200 flex items-center gap-2 overflow-x-auto">
+            <span className="text-xs font-bold text-slate-500 shrink-0 flex items-center gap-1">
+              <HelpCircle className="w-3.5 h-3.5 text-emerald-600" /> Suggested Prompts:
+            </span>
+            {FAQ_PROMPTS.map((promptText, i) => (
+              <button
+                key={i}
+                onClick={() => handleSendMessage(undefined, promptText)}
+                disabled={isTyping}
+                className="px-3 py-1 bg-white border border-slate-200 rounded-full text-xs font-medium text-slate-700 hover:border-emerald-500 hover:text-emerald-700 transition-colors whitespace-nowrap shrink-0 shadow-2xs"
+              >
+                {promptText}
+              </button>
+            ))}
+          </div>
+
           <div className="p-4 bg-white border-t border-slate-200">
             <form onSubmit={handleSendMessage} className="flex gap-2">
               <input
                 type="text"
                 value={inputMessage}
                 onChange={(e) => setInputMessage(e.target.value)}
-                placeholder="Query database or ask for procurement advice..."
+                placeholder="Ask in English or Taglish (e.g., 'Sino supplier ng kabilya?')..."
                 className="flex-1 px-4 py-3 bg-slate-50 border border-slate-200 focus:bg-white focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 rounded-xl outline-none transition-all text-sm font-medium"
                 disabled={isTyping}
               />

@@ -13,18 +13,18 @@ import { Search, MapPin } from "lucide-react";
 import { sitesAPI, suppliersAPI } from "../../services/apiService";
 import type { ProjectSite, Supplier } from "../../types";
 
-// --- Leaflet Icon Fixes ---
+// --- Leaflet Icon Fixes (Using Reliable unpkg CDN) ---
 delete (L.Icon.Default.prototype as any)._getIconUrl;
 L.Icon.Default.mergeOptions({
-  iconRetinaUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png",
-  iconUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png",
-  shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
+  iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+  iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+  shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
 });
 
 const createIcon = (color: string) =>
   new L.Icon({
     iconUrl: `https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-${color}.png`,
-    shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
+    shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
     iconSize: [25, 41],
     iconAnchor: [12, 41],
     popupAnchor: [1, -34],
@@ -151,13 +151,11 @@ export function LogisticsMap() {
     if (surplusLoc && shortageLoc) {
       const fetchRoadRoute = async () => {
         try {
-          // OSRM format: longitude,latitude
           const url = `https://router.project-osrm.org/route/v1/driving/${surplusLoc.lng},${surplusLoc.lat};${shortageLoc.lng},${shortageLoc.lat}?overview=full&geometries=geojson`;
           const response = await fetch(url);
           const data = await response.json();
           
           if (data.routes && data.routes.length > 0) {
-            // GeoJSON returns [lon, lat], but Leaflet needs [lat, lon]
             const coords = data.routes[0].geometry.coordinates.map((c: number[]) => [c[1], c[0]]);
             setTransferRoute(coords);
           }
@@ -168,7 +166,7 @@ export function LogisticsMap() {
       };
       fetchRoadRoute();
     } else {
-      setTransferRoute([]); // Clear the route if pins are hidden
+      setTransferRoute([]); 
     }
   }, [surplusLoc?.id, shortageLoc?.id]);
 
@@ -188,7 +186,6 @@ export function LogisticsMap() {
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 flex-1 min-h-[500px]">
         {/* SIDEBAR LEGEND */}
         <div className="bg-white border border-neutral-200 rounded-xl shadow-sm p-4 flex flex-col gap-4 overflow-y-auto">
-          
           <div className="relative">
             <Search className="w-4 h-4 absolute left-3 top-2.5 text-neutral-400" />
             <input
@@ -249,10 +246,10 @@ export function LogisticsMap() {
           </div>
         </div>
 
-        {/* MAP */}
-        <div className="lg:col-span-3 bg-neutral-100 border border-neutral-200 rounded-xl overflow-hidden relative shadow-inner z-0">
+        {/* MAP CONTAINER FIX: Added explicit min-height to force map to render */}
+        <div className="lg:col-span-3 bg-neutral-100 border border-neutral-200 rounded-xl overflow-hidden relative shadow-inner z-0 min-h-[500px]">
           {!loading && (
-            <MapContainer center={[14.57, 121.01]} zoom={13} className="w-full h-full">
+            <MapContainer center={[14.57, 121.01]} zoom={13} className="w-full h-full absolute inset-0">
               <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
               
               {visibleLocations.map((loc, i) => (
@@ -263,7 +260,6 @@ export function LogisticsMap() {
                   <Popup>
                     <div className="p-1">
                       <strong className="text-base mb-1 block">{loc.name}</strong>
-                      
                       <div className="flex items-start gap-1 text-[10px] text-neutral-500 mb-2">
                         <MapPin className="w-3 h-3 mt-0.5 shrink-0" />
                         <span>{loc.address}</span>
@@ -278,7 +274,6 @@ export function LogisticsMap() {
                 </Marker>
               ))}
 
-              {/* DYNAMIC ROAD ROUTING LINE */}
               {showProjects && transferRoute.length > 0 && (
                 <Polyline
                   positions={transferRoute}

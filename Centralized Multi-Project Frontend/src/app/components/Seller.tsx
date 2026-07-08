@@ -3,6 +3,9 @@ import { Package, Plus } from "lucide-react";
 
 export const SellerPortal = () => {
   const [materialName, setMaterialName] = useState("");
+  const [brand, setBrand] = useState("");
+  const [quantity, setQuantity] = useState("");
+  const [unit, setUnit] = useState("Pcs"); // Default to Pcs
   const [price, setPrice] = useState("");
   const [stockLevel, setStockLevel] = useState("Available");
   const [message, setMessage] = useState<{
@@ -10,14 +13,14 @@ export const SellerPortal = () => {
     text: string;
   } | null>(null);
 
-  // --- NEW: State to hold the inventory fetched from the backend ---
   const [catalog, setCatalog] = useState<any[]>([]);
 
-  // --- NEW: Function to securely fetch this specific seller's catalog ---
+  const baseUrl = `http://${window.location.hostname}:8000`;
+
   const fetchMyCatalog = async () => {
     const token = localStorage.getItem("token");
     try {
-      const response = await fetch("http://localhost:8000/seller/materials", {
+      const response = await fetch(`${baseUrl}/seller/materials`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (response.ok) {
@@ -29,7 +32,6 @@ export const SellerPortal = () => {
     }
   };
 
-  // --- NEW: Run the fetch function the moment the page loads ---
   useEffect(() => {
     fetchMyCatalog();
   }, []);
@@ -41,7 +43,7 @@ export const SellerPortal = () => {
     const token = localStorage.getItem("token");
 
     try {
-      const response = await fetch("http://localhost:8000/seller/materials", {
+      const response = await fetch(`${baseUrl}/seller/materials`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -49,6 +51,9 @@ export const SellerPortal = () => {
         },
         body: JSON.stringify({
           material_name: materialName,
+          brand: brand || "Generic/No Brand",
+          quantity: parseFloat(quantity) || 0,
+          unit: unit,
           price: parseFloat(price),
           stock_level: stockLevel,
         }),
@@ -64,11 +69,13 @@ export const SellerPortal = () => {
         text: "Item successfully added to your catalog!",
       });
 
-      // --- NEW: Refresh the UI list instantly after adding ---
       fetchMyCatalog();
 
       // Clear the form
       setMaterialName("");
+      setBrand("");
+      setQuantity("");
+      setUnit("Pcs");
       setPrice("");
       setStockLevel("Available");
     } catch (error: any) {
@@ -93,7 +100,6 @@ export const SellerPortal = () => {
         </div>
       )}
 
-      {/* Grid Layout: Form on the left, Inventory on the right */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* LEFT COLUMN: Add Item Form */}
         <div className="lg:col-span-1">
@@ -116,13 +122,66 @@ export const SellerPortal = () => {
                   value={materialName}
                   onChange={(e) => setMaterialName(e.target.value)}
                   className="w-full p-2.5 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-                  placeholder="e.g., Portland Cement 40kg"
+                  placeholder="e.g., Portland Cement"
                 />
               </div>
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Price (₱)
+                  Brand / Specs
+                </label>
+                <input
+                  type="text"
+                  value={brand}
+                  onChange={(e) => setBrand(e.target.value)}
+                  className="w-full p-2.5 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                  placeholder="e.g., Republic, 40kg"
+                />
+              </div>
+
+              <div className="flex gap-3">
+                <div className="flex-1">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Qty Available
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    required
+                    value={quantity}
+                    onChange={(e) => setQuantity(e.target.value)}
+                    className="w-full p-2.5 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                    placeholder="0"
+                  />
+                </div>
+                <div className="w-1/2">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Unit
+                  </label>
+                  <select
+                    required
+                    value={unit}
+                    onChange={(e) => setUnit(e.target.value)}
+                    className="w-full p-2.5 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white"
+                  >
+                    <option value="Pcs">Pcs</option>
+                    <option value="Bags">Bags</option>
+                    <option value="Boxes">Boxes</option>
+                    <option value="Rolls">Rolls</option>
+                    <option value="Kgs">Kgs</option>
+                    <option value="Tons">Tons</option>
+                    <option value="Liters">Liters</option>
+                    <option value="Gallons">Gallons</option>
+                    <option value="Meters">Meters</option>
+                    <option value="Bundles">Bundles</option>
+                    <option value="Truckloads">Truckloads</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Price per Unit (₱)
                 </label>
                 <input
                   type="number"
@@ -137,7 +196,7 @@ export const SellerPortal = () => {
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Current Stock Level
+                  Stock Status
                 </label>
                 <select
                   value={stockLevel}
@@ -182,28 +241,33 @@ export const SellerPortal = () => {
                     className="flex items-center justify-between p-4 border border-gray-100 rounded-lg hover:bg-gray-50 transition"
                   >
                     <div>
-                      <p className="font-bold text-gray-900">
+                      <p className="font-bold text-gray-900 text-lg">
                         {item.material_name}
                       </p>
-                      <p className="text-sm font-medium text-gray-500 mt-1">
-                        Status:{" "}
+                      <p className="text-xs font-bold text-gray-500 mb-1 uppercase tracking-wider">
+                        {item.brand || "Generic"}
+                      </p>
+                      <div className="flex items-center gap-3 mt-1">
+                        <span className="text-sm font-medium text-gray-700 bg-gray-100 px-2 py-0.5 rounded">
+                          Stock: {item.quantity || 0} {item.unit || "Pcs"}
+                        </span>
                         <span
-                          className={
+                          className={`text-sm font-medium ${
                             item.stock_level === "Out of Stock"
                               ? "text-red-500"
                               : "text-emerald-600"
-                          }
+                          }`}
                         >
-                          {item.stock_level}
+                          • {item.stock_level}
                         </span>
-                      </p>
+                      </div>
                     </div>
                     <div className="text-right">
-                      <p className="font-black text-lg text-gray-900">
+                      <p className="font-black text-xl text-gray-900">
                         ₱{item.price.toFixed(2)}
                       </p>
                       <p className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">
-                        Unit Price
+                        Per {item.unit || "Unit"}
                       </p>
                     </div>
                   </div>

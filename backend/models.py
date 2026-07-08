@@ -84,9 +84,13 @@ class ProjectSite(Base):
     latitude = Column(Float)
     longitude = Column(Float)
     
-    stage_status = Column(String(50), default="Pre-construction") 
+    stage_status = Column(String(50), default="Pre Construction") 
     progress_percentage = Column(Integer, default=0) 
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    
+    # --- NEW: Soft Deletion Flag ---
+    is_active = Column(Boolean, default=True)
+    # -------------------------------
     
     manager_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     manager = relationship("User")
@@ -106,6 +110,7 @@ class Inventory(Base):
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
     quantity = Column(Float)
+    baseline_quantity = Column(Float, default=0.0) 
     unit = Column(String)
     status = Column(String) 
     site_id = Column(Integer, ForeignKey("project_sites.id"))
@@ -128,8 +133,6 @@ class Supplier(Base):
     address = Column(String, nullable=True)
 
     materials = relationship("SupplierMaterial", back_populates="supplier", cascade="all, delete-orphan")
-    
-    # ADD THIS LINE RIGHT HERE:
     users = relationship("User", back_populates="supplier")
 
 # --- Supplier Catalog ---
@@ -140,6 +143,13 @@ class SupplierMaterial(Base):
     id = Column(Integer, primary_key=True, index=True)
     supplier_id = Column(Integer, ForeignKey("suppliers.id", ondelete="CASCADE"))
     material_name = Column(String, index=True)
+    
+    # --- NEW ADDED COLUMNS FOR SELLER PORTAL ---
+    brand = Column(String(50), default="Generic/No Brand", nullable=False)
+    quantity = Column(Float, default=0.0)
+    unit = Column(String(20), default="Pcs")
+    # -------------------------------------------
+    
     price = Column(Float, default=0.0)
     stock_level = Column(String, default="Unknown") 
     
@@ -195,6 +205,7 @@ class Notification(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     user = relationship("User", back_populates="notifications")
+
 
 # --- Purchase Orders (Pentabuild -> External Supplier) ---
 class PurchaseOrder(Base):
