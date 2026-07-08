@@ -88,9 +88,7 @@ class ProjectSite(Base):
     progress_percentage = Column(Integer, default=0) 
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     
-    # --- NEW: Soft Deletion Flag ---
     is_active = Column(Boolean, default=True)
-    # -------------------------------
     
     manager_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     manager = relationship("User")
@@ -144,11 +142,9 @@ class SupplierMaterial(Base):
     supplier_id = Column(Integer, ForeignKey("suppliers.id", ondelete="CASCADE"))
     material_name = Column(String, index=True)
     
-    # --- NEW ADDED COLUMNS FOR SELLER PORTAL ---
     brand = Column(String(50), default="Generic/No Brand", nullable=False)
     quantity = Column(Float, default=0.0)
     unit = Column(String(20), default="Pcs")
-    # -------------------------------------------
     
     price = Column(Float, default=0.0)
     stock_level = Column(String, default="Unknown") 
@@ -157,18 +153,30 @@ class SupplierMaterial(Base):
 
     supplier = relationship("Supplier", back_populates="materials")
 
-# --- Material Requests ---
+# --- Material Requests (ERP Upgraded) ---
 class MaterialRequest(Base):
     __tablename__ = "material_requests"
     __table_args__ = {'extend_existing': True}
 
     id = Column(Integer, primary_key=True, index=True)
     item_name = Column(String)
-    quantity_needed = Column(Integer)
+    brand = Column(String(50), default="Generic/No Brand")
+    quantity_needed = Column(Float)
+    unit = Column(String, default="Pcs")
+    
     site_id = Column(Integer, ForeignKey("project_sites.id"))
-    status = Column(String, default="Pending")
+    inventory_id = Column(Integer, ForeignKey("inventory.id"), nullable=True) # Linking to the specific physical shortage
+    requested_by_id = Column(Integer, ForeignKey("users.id"), nullable=True) 
+    approved_by_id = Column(Integer, ForeignKey("users.id"), nullable=True) # Admin Audit Tracker
+    
+    # Statuses: Pending Approval, Approved & Routing, Fulfilled, Rejected
+    status = Column(String, default="Pending Approval")
+    fulfillment_method = Column(String, nullable=True) # "Internal Transfer" or "External Purchase"
+    
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
     
     site = relationship("ProjectSite", back_populates="requests")
+    inventory_item = relationship("Inventory")
 
 # --- Material Transfers ---
 class MaterialTransfer(Base):
@@ -183,6 +191,10 @@ class MaterialTransfer(Base):
 
     source_site_id = Column(Integer, ForeignKey("project_sites.id"), nullable=False)
     destination_site_id = Column(Integer, ForeignKey("project_sites.id"), nullable=False)
+    
+    # --- ERP GOLDEN THREAD ---
+    linked_request_id = Column(Integer, ForeignKey("material_requests.id"), nullable=True)
+
     status = Column(String, default=TransferStatus.IN_TRANSIT.value)
 
     dispatched_at = Column(DateTime, default=datetime.datetime.utcnow)
@@ -206,8 +218,7 @@ class Notification(Base):
 
     user = relationship("User", back_populates="notifications")
 
-
-# --- Purchase Orders (Pentabuild -> External Supplier) ---
+# --- Purchase Orders ---
 class PurchaseOrder(Base):
     __tablename__ = "purchase_orders"
     __table_args__ = {'extend_existing': True}
@@ -216,11 +227,13 @@ class PurchaseOrder(Base):
     supplier_id = Column(Integer, ForeignKey("suppliers.id"))
     site_id = Column(Integer, ForeignKey("project_sites.id"))
     
+    # --- ERP GOLDEN THREAD ---
+    linked_request_id = Column(Integer, ForeignKey("material_requests.id"), nullable=True)
+    
     material_name = Column(String)
     quantity = Column(Float)
     total_price = Column(Float)
     
-    # Statuses: Pending, Accepted, Shipped, Delivered, Cancelled
     status = Column(String, default="Pending") 
     order_date = Column(DateTime, default=datetime.datetime.utcnow)
 

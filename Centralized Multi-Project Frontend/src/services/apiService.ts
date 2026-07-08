@@ -8,7 +8,6 @@ import type {
 } from "../types";
 
 // AUTOMATIC NETWORK ROUTING:
-// This automatically uses 'localhost' when on your PC, and your IP Address when on your phone!
 const BASE_URL = `http://${window.location.hostname}:8000`;
 
 async function fetchAPI<T>(
@@ -16,29 +15,19 @@ async function fetchAPI<T>(
   options?: RequestInit,
 ): Promise<T> {
   try {
-    const token =
-      localStorage.getItem("token") || localStorage.getItem("access_token");
-
+    const token = localStorage.getItem("token") || localStorage.getItem("access_token");
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       ...((options?.headers as Record<string, string>) || {}),
     };
 
-    if (token) {
-      headers["Authorization"] = `Bearer ${token}`;
-    }
+    if (token) headers["Authorization"] = `Bearer ${token}`;
 
-    const response = await fetch(endpoint, {
-      ...options,
-      headers,
-    });
+    const response = await fetch(endpoint, { ...options, headers });
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      throw new Error(
-        errorData.detail ||
-          `API Error: ${response.status} ${response.statusText}`,
-      );
+      throw new Error(errorData.detail || `API Error: ${response.status} ${response.statusText}`);
     }
 
     return await response.json();
@@ -67,193 +56,98 @@ export const authAPI = {
     localStorage.setItem("token", data.access_token);
     return data;
   },
-
-  register: (userData: {
-    username: string;
-    email: string;
-    password: string;
-    role: string;
-    company_name?: string;
-  }) =>
-    fetchAPI<any>(`${BASE_URL}/register`, {
-      method: "POST",
-      body: JSON.stringify(userData),
-    }),
-
-  logout: () => {
-    localStorage.removeItem("token");
-  },
+  register: (userData: any) => fetchAPI<any>(`${BASE_URL}/register`, { method: "POST", body: JSON.stringify(userData) }),
+  logout: () => localStorage.removeItem("token"),
 };
 
 // --- 1. SITE APIs ---
 export const sitesAPI = {
-  create: (siteData: {
-    name: string;
-    address?: string;
-    lat: number;
-    lon: number;
-    manager_id?: number;
-  }) =>
-    fetchAPI<ProjectSite>(`${BASE_URL}/sites/`, {
-      method: "POST",
-      body: JSON.stringify(siteData),
-    }),
-
+  create: (siteData: any) => fetchAPI<ProjectSite>(`${BASE_URL}/sites/`, { method: "POST", body: JSON.stringify(siteData) }),
   list: () => fetchAPI<ProjectSite[]>(`${BASE_URL}/sites/`),
-
-  updateStatus: (id: number, stage_status: string) =>
-    fetchAPI<ProjectSite>(`${BASE_URL}/sites/${id}/status`, {
-      method: "PATCH",
-      body: JSON.stringify({ stage_status }),
-    }),
+  updateStatus: (id: number, stage_status: string) => fetchAPI<ProjectSite>(`${BASE_URL}/sites/${id}/status`, { method: "PATCH", body: JSON.stringify({ stage_status }) }),
 };
 
 // --- 2. INVENTORY APIs ---
 export const inventoryAPI = {
-  create: (item: Omit<Inventory, "id">) =>
-    fetchAPI<Inventory>(`${BASE_URL}/inventory/`, {
-      method: "POST",
-      body: JSON.stringify(item),
-    }),
-
+  create: (item: Omit<Inventory, "id">) => fetchAPI<Inventory>(`${BASE_URL}/inventory/`, { method: "POST", body: JSON.stringify(item) }),
   list: () => fetchAPI<Inventory[]>(`${BASE_URL}/inventory/`),
-
   grouped: () => fetchAPI<InventoryGrouped>(`${BASE_URL}/inventory/grouped`),
-
-  logTransaction: (data: any) =>
-    fetchAPI(`${BASE_URL}/inventory/log`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
-
-  overrideStatus: (id: number, status: string) =>
-    fetchAPI(`${BASE_URL}/inventory/${id}/flag`, {
-      method: "PATCH",
-      body: JSON.stringify({ status }),
-    }),
-
+  logTransaction: (data: any) => fetchAPI(`${BASE_URL}/inventory/log`, { method: "POST", body: JSON.stringify(data) }),
+  overrideStatus: (id: number, status: string) => fetchAPI(`${BASE_URL}/inventory/${id}/flag`, { method: "PATCH", body: JSON.stringify({ status }) }),
   getLogs: () => fetchAPI<any[]>(`${BASE_URL}/inventory/audit-logs/`),
-
-  delete: (id: number) =>
-    fetchAPI(`${BASE_URL}/inventory/${id}`, {
-      method: "DELETE",
-    }),
-
-  bulkUploadMapped: async (mappedItems: any[]) =>
-    fetchAPI<any>(`${BASE_URL}/inventory/bulk-upload`, {
-      method: "POST",
-      body: JSON.stringify(mappedItems),
-    }),
+  delete: (id: number) => fetchAPI(`${BASE_URL}/inventory/${id}`, { method: "DELETE" }),
+  bulkUploadMapped: async (mappedItems: any[]) => fetchAPI<any>(`${BASE_URL}/inventory/bulk-upload`, { method: "POST", body: JSON.stringify(mappedItems) }),
 };
 
 // --- 3. MATERIAL TRANSFER APIs ---
 export const transferAPI = {
-  initiate: (data: {
-    source_site_id: number;
-    destination_site_id: number;
-    item_name: string;
-    brand: string;
-    quantity: number;
-    unit: string;
-  }) =>
-    fetchAPI(`${BASE_URL}/transfers/initiate`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
-
-  getIncoming: (site_id: number) =>
-    fetchAPI<any[]>(`${BASE_URL}/transfers/incoming/${site_id}`),
-
-  receive: (transfer_id: number) =>
-    fetchAPI(`${BASE_URL}/transfers/${transfer_id}/receive`, {
-      method: "POST",
-    }),
+  initiate: (data: any) => fetchAPI(`${BASE_URL}/transfers/initiate`, { method: "POST", body: JSON.stringify(data) }),
+  getIncoming: (site_id: number) => fetchAPI<any[]>(`${BASE_URL}/transfers/incoming/${site_id}`),
+  receive: (transfer_id: number) => fetchAPI(`${BASE_URL}/transfers/${transfer_id}/receive`, { method: "POST" }),
 };
 
 // --- 4. SUPPLIER APIs ---
 export const suppliersAPI = {
-  create: (data: any) =>
-    fetchAPI<Supplier>(`${BASE_URL}/suppliers/`, {
-      method: "POST",
-      body: JSON.stringify({
-        ...data,
-        rating: Number(data.rating),
-      }),
-    }),
-
+  create: (data: any) => fetchAPI<Supplier>(`${BASE_URL}/suppliers/`, { method: "POST", body: JSON.stringify({ ...data, rating: Number(data.rating) }) }),
   list: () => fetchAPI<Supplier[]>(`${BASE_URL}/suppliers/`),
-
-  updateRating: (id: number, rating: number) =>
-    fetchAPI<any>(`${BASE_URL}/suppliers/${id}/rating`, {
-      method: "PATCH",
-      body: JSON.stringify({ rating: Number(rating) }),
-    }),
-
-  delete: (id: number) =>
-    fetchAPI<any>(`${BASE_URL}/suppliers/${id}`, {
-      method: "DELETE",
-    }),
+  updateRating: (id: number, rating: number) => fetchAPI<any>(`${BASE_URL}/suppliers/${id}/rating`, { method: "PATCH", body: JSON.stringify({ rating: Number(rating) }) }),
+  delete: (id: number) => fetchAPI<any>(`${BASE_URL}/suppliers/${id}`, { method: "DELETE" }),
 };
 
 // --- 5. ADVISORY APIs ---
 export const advisoryAPI = {
-  procure: (site_id: number, item_name: string) =>
-    fetchAPI<ProcurementAdvice[]>(
-      `${BASE_URL}/advisory/procure/${site_id}?item_name=${encodeURIComponent(item_name)}`,
-    ),
-
-  chat: (prompt: string, history: { role: string; content: string }[]) =>
-    fetchAPI<any>(`${BASE_URL}/advisory/chat`, {
-      method: "POST",
-      body: JSON.stringify({ message: prompt, context: { history } }),
-    }),
+  procure: (site_id: number, item_name: string) => fetchAPI<ProcurementAdvice[]>(`${BASE_URL}/advisory/procure/${site_id}?item_name=${encodeURIComponent(item_name)}`),
+  chat: (prompt: string, history: { role: string; content: string }[]) => fetchAPI<any>(`${BASE_URL}/advisory/chat`, { method: "POST", body: JSON.stringify({ message: prompt, context: { history } }) }),
 };
-// --- 6. MATERIAL REQUEST APIs (UPDATED FOR ADMIN BOTTLENECK) ---
+
+// --- 6. MATERIAL REQUEST APIs (ERP UPGRADED) ---
 export const requestsAPI = {
-  create: (item: Omit<MaterialRequest, "id">) =>
-    fetchAPI<MaterialRequest>(`${BASE_URL}/requests/`, {
+  create: (item: Omit<MaterialRequest, "id">) => fetchAPI<MaterialRequest>(`${BASE_URL}/requests/`, { method: "POST", body: JSON.stringify(item) }),
+  
+  restock: (inventory_id: number, quantity_needed: number) => 
+    fetchAPI<MaterialRequest>(`${BASE_URL}/requests/restock/${inventory_id}`, {
       method: "POST",
-      body: JSON.stringify(item),
+      body: JSON.stringify({ quantity_needed }),
     }),
 
   list: () => fetchAPI<MaterialRequest[]>(`${BASE_URL}/requests/`),
+  updateStatus: (id: number, status: string) => fetchAPI<MaterialRequest>(`${BASE_URL}/requests/${id}/status`, { method: "PATCH", body: JSON.stringify({ status }) }),
+  
+  // ADD THIS LINE:
+  delete: (id: number) => fetchAPI(`${BASE_URL}/requests/${id}`, { method: "DELETE" }),
+};
 
-  updateStatus: (id: number, status: string) =>
-    fetchAPI<MaterialRequest>(`${BASE_URL}/requests/${id}/status`, {
-      method: "PATCH",
-      body: JSON.stringify({ status }),
-    }),
+// --- 6.5 PURCHASE ORDERS (NEW) ---
+export const purchaseOrdersAPI = {
+  create: (data: any) => fetchAPI(`${BASE_URL}/inventory/purchase-orders`, { method: "POST", body: JSON.stringify(data) }),
+  list: () => fetchAPI<any[]>(`${BASE_URL}/inventory/purchase-orders`),
+  
+  // FIX: Added rating payload here
+  receive: (id: number, rating: number) => fetchAPI(`${BASE_URL}/inventory/purchase-orders/${id}/receive`, { 
+    method: "POST",
+    body: JSON.stringify({ rating })
+  }),
+  
+  cancel: (id: number) => fetchAPI(`${BASE_URL}/inventory/purchase-orders/${id}/cancel`, { method: "POST" }),
 };
 
 // --- 7. SYSTEM APIs ---
-export const systemAPI = {
-  healthCheck: () => fetchAPI(`${BASE_URL}/`),
-};
+export const systemAPI = { healthCheck: () => fetchAPI(`${BASE_URL}/`) };
 
 // --- SMART GEOCODING HELPER ---
-export const geocodeAddress = async (
-  addressText: string,
-): Promise<{ lat: number; lon: number } | null> => {
+export const geocodeAddress = async (addressText: string): Promise<{ lat: number; lon: number } | null> => {
   try {
     const tryFetch = async (queryStr: string) => {
       const query = encodeURIComponent(`${queryStr}, Philippines`);
-      const response = await fetch(
-        `https://nominatim.openstreetmap.org/search?format=json&q=${query}&limit=1`,
-      );
+      const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${query}&limit=1`);
       const data = await response.json();
-
-      if (data && data.length > 0) {
-        return { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
-      }
+      if (data && data.length > 0) return { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
       return null;
     };
-
     let result = await tryFetch(addressText);
     if (result) return result;
-
     const parts = addressText.split(",").map((p) => p.trim());
     let attempts = 0;
-
     while (parts.length > 1 && attempts < 3) {
       parts.shift();
       const fallbackAddress = parts.join(", ");
@@ -269,46 +163,23 @@ export const geocodeAddress = async (
   }
 };
 
-// --- 8. USER & TEAM MANAGEMENT APIs ---
+// --- 8. USER & TEAM APIs ---
 export const usersAPI = {
-  create: (userData: any) =>
-    fetchAPI(`${BASE_URL}/register`, {
-      method: "POST",
-      body: JSON.stringify(userData),
-    }),
-
+  create: (userData: any) => fetchAPI(`${BASE_URL}/register`, { method: "POST", body: JSON.stringify(userData) }),
   getStaff: () => fetchAPI<any[]>(`${BASE_URL}/users/managers`),
 };
 
 // --- 9. NOTIFICATIONS API ---
 export const notificationsAPI = {
   listUnread: () => fetchAPI<any[]>(`${BASE_URL}/notifications`),
-
-  markAsRead: (id: number) =>
-    fetchAPI(`${BASE_URL}/notifications/${id}/read`, {
-      method: "PATCH",
-    }),
-
-  markAllAsRead: () =>
-    fetchAPI(`${BASE_URL}/notifications/read-all`, {
-      method: "PATCH",
-    }),
+  markAsRead: (id: number) => fetchAPI(`${BASE_URL}/notifications/${id}/read`, { method: "PATCH" }),
+  markAllAsRead: () => fetchAPI(`${BASE_URL}/notifications/read-all`, { method: "PATCH" }),
 };
 
 // --- 10. SECURITY & SETTINGS API ---
 export const securityAPI = {
-  updatePassword: (data: any) =>
-    fetchAPI(`${BASE_URL}/users/password`, {
-      method: "PATCH",
-      body: JSON.stringify(data),
-    }),
-
+  updatePassword: (data: any) => fetchAPI(`${BASE_URL}/users/password`, { method: "PATCH", body: JSON.stringify(data) }),
   getSessions: () => fetchAPI<any[]>(`${BASE_URL}/users/sessions`),
-
-  revokeOtherSessions: () =>
-    fetchAPI(`${BASE_URL}/users/sessions`, {
-      method: "DELETE",
-    }),
-
+  revokeOtherSessions: () => fetchAPI(`${BASE_URL}/users/sessions`, { method: "DELETE" }),
   getSecurityLogs: () => fetchAPI<any[]>(`${BASE_URL}/users/security-logs`),
 };

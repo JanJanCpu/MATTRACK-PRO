@@ -150,6 +150,8 @@ class SupplierMaterialResponse(SupplierMaterialBase):
         from_attributes = True
 
 # --- SUPPLIERS ---
+class RatingUpdate(BaseModel):
+    rating: float
 class SupplierBase(BaseModel):
     name: str
     contact: str
@@ -191,6 +193,10 @@ class RequestCreate(BaseModel):
     quantity_needed: float
     unit: str = "Pcs"
     site_id: int
+    inventory_id: Optional[int] = None # Support manual or auto-linked requests
+
+class RequestRestock(BaseModel):
+    quantity_needed: float # Used for the 1-click restock button!
 
 class RequestStatusUpdate(BaseModel):
     status: str
@@ -199,6 +205,8 @@ class RequestResponse(RequestCreate):
     id: int
     status: str
     requested_by_id: Optional[int] = None
+    approved_by_id: Optional[int] = None
+    fulfillment_method: Optional[str] = None
     created_at: datetime
     class Config:
         from_attributes = True
@@ -211,6 +219,7 @@ class TransferCreate(BaseModel):
     brand: str = "Generic/No Brand"
     quantity: float
     unit: str
+    linked_request_id: Optional[int] = None # ERP Gold Thread
 
 class TransferResponse(BaseModel):
     id: int
@@ -223,6 +232,7 @@ class TransferResponse(BaseModel):
     status: str
     dispatched_at: datetime
     received_at: Optional[datetime] = None
+    linked_request_id: Optional[int] = None
     class Config:
         from_attributes = True
 
@@ -232,3 +242,4 @@ class PurchaseOrderCreate(BaseModel):
     material_name: str
     quantity: float
     total_price: float
+    linked_request_id: Optional[int] = None # ERP Gold Thread

@@ -160,7 +160,6 @@ export function Suppliers() {
       }
 
       const token = localStorage.getItem("token");
-      
       const payload = {
         supplier_id: draftingPOFor.supplier_id,
         site_id: Number(finalSiteId),
@@ -256,12 +255,12 @@ export function Suppliers() {
         // Fetch sites ONLY for Admin/Owner so they can use the dropdown
         if (["admin", "owner"].includes(role)) {
           sitesAPI.list().then((data) => {
-              if (data && data.length > 0) {
-                setSites(data);
-              }
-            }).catch(() => {
-              setSites([{ id: 999, name: "PENTABUILD Main HQ (Demo Site)" }]);
-            });
+            if (data && data.length > 0) {
+              setSites(data);
+            }
+          }).catch(() => {
+            setSites([{ id: 999, name: "PENTABUILD Main HQ (Demo Site)" }]);
+          });
         }
       } catch (e) {
         console.error("Token parse error", e);
@@ -336,7 +335,6 @@ export function Suppliers() {
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500 max-w-6xl mx-auto">
-      
       {/* --- SUPPLIER DIRECTORY HEADER --- */}
       <div className="flex items-center justify-between">
         <div>
@@ -496,7 +494,7 @@ export function Suppliers() {
       {viewingCatalogFor &&
         createPortal(
           <div className="fixed inset-0 bg-black/60 z-[9999] flex items-center justify-center p-4 animate-in fade-in">
-            <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl overflow-hidden flex flex-col max-h-[80vh]">
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl overflow-hidden flex flex-col max-h-[80vh]">
               <div className="p-5 border-b bg-blue-50 border-blue-100 flex justify-between items-center text-blue-900 shrink-0">
                 <h2 className="text-lg font-bold flex items-center gap-2"><Store className="w-5 h-5" /> {viewingCatalogFor.name} Catalog</h2>
                 <button onClick={() => setViewingCatalogFor(null)} className="p-1 hover:bg-blue-200/50 rounded-md transition-colors"><X className="w-5 h-5" /></button>
@@ -520,6 +518,7 @@ export function Suppliers() {
                       <tr>
                         <th className="px-6 py-4 font-medium">Material</th>
                         <th className="px-6 py-4 font-medium text-right">Price</th>
+                        <th className="px-6 py-4 font-medium text-center">Available Stock</th>
                         <th className="px-6 py-4 font-medium text-center">Stock Level</th>
                         <th className="px-6 py-4 font-medium text-center">Delivery Rating</th>
                         <th className="px-6 py-4 font-medium text-right">Action</th>
@@ -531,6 +530,7 @@ export function Suppliers() {
                           <tr key={i} className="hover:bg-neutral-50">
                             <td className="px-6 py-4 font-bold text-neutral-900">{item.material_name}</td>
                             <td className="px-6 py-4 text-right font-black text-emerald-700">₱{item.price.toFixed(2)}</td>
+                            <td className="px-6 py-4 text-center font-bold text-slate-700">{item.quantity} {item.unit}</td>
                             <td className="px-6 py-4 text-center">
                               <span className={`px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider ${item.stock_level === "High" ? "bg-emerald-100 text-emerald-700" : item.stock_level === "Medium" ? "bg-amber-100 text-amber-700" : "bg-red-100 text-red-700"}`}>{item.stock_level}</span>
                             </td>
@@ -552,7 +552,7 @@ export function Suppliers() {
                           </tr>
                         ))
                       ) : (
-                        <tr><td colSpan={5} className="py-12 text-center text-neutral-400 font-medium">No materials found matching "{catalogSearch}"</td></tr>
+                        <tr><td colSpan={6} className="py-12 text-center text-neutral-400 font-medium">No materials found matching "{catalogSearch}"</td></tr>
                       )}
                     </tbody>
                   </table>
