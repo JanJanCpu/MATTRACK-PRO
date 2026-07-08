@@ -1488,7 +1488,7 @@ def health_check():
     return {"status": "online", "system": "MatTrack PRO Core", "version": "2.3.0"}
 
 # --- ADVISORY ENGINE & RAG CHATBOT ---
-@app.get("/advisory/auto-restock/{site_id}/{item_name}/{quantity_needed}", tags=["Advisory"])
+@app.get("/advisory/auto-restock/{site_id}", tags=["Advisory"])
 def get_smart_restock_options(site_id: int, item_name: str, quantity_needed: float, db: Session = Depends(get_db)):
     target_site = db.query(models.ProjectSite).filter(models.ProjectSite.id == site_id).first()
     if not target_site:

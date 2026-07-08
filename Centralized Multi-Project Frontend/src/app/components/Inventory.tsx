@@ -244,38 +244,54 @@ export function Inventory() {
     }
   };
 
- const handleSmartRestock = async (item: InventoryWithCategory) => {
+  const [restockQty, setRestockQty] = useState<number>(0);
+
+  // 1. Opens the modal and SUGGESTS the baseline difference, but waits for your approval
+  const handleSmartRestock = (item: InventoryWithCategory) => {
     setRestockItem(item);
+    // Suggest the missing amount, but default to at least 1
+    const suggestedQty = Math.max(1, item.baseline_quantity - item.quantity);
+    setRestockQty(suggestedQty);
+    setRestockOptions([]); // Clear any old calculations
     setShowRestockModal(true);
+  };
+
+  // 2. Actually fires the calculation using YOUR chosen quantity
+  const runAdvisorCalculation = async () => {
+    if (!restockItem) return;
     setIsRestockLoading(true);
 
     try {
-      const defaultRestockQty = 50;
-      // FIX: Safely passing item_name and quantity_needed as query parameters to bypass the slash bug
+      // FIX 1: Formatted the URL to exactly match FastAPI's path parameters
       const response = await fetch(
-        `http://${window.location.hostname}:8000/advisory/auto-restock/${item.site_id}?item_name=${encodeURIComponent(item.item_name)}&quantity_needed=${defaultRestockQty}`,
+        `http://${window.location.hostname}:8000/advisory/auto-restock/${restockItem.site_id}?item_name=${encodeURIComponent(restockItem.item_name)}&quantity_needed=${restockQty}`
       );
 
       if (response.ok) {
         const data = await response.json();
         setRestockOptions(data);
+      } else {
+        console.error("API returned an error:", await response.text());
+        alert("Failed to calculate routing. Check console for details.");
       }
     } catch (error) {
-      console.error("Failed to fetch AI restock options", error);
+      console.error("Failed to fetch restock options", error);
+      alert("Network error: Could not reach the advisory engine.");
     } finally {
       setIsRestockLoading(false);
     }
   };
-  
+
   const handleExecuteRestock = async (option: any) => {
     if (!restockItem) return;
 
     const token = localStorage.getItem("token");
-    const quantityNeeded = 50;
+    
+    // FIX 2: Uses the state variable you typed in!
+    const quantityNeeded = restockQty; 
 
     try {
       if (option.type === "EXTERNAL_PURCHASE") {
-        // FIX: Replaced "localhost" with dynamic hostname so it works across Wi-Fi
         await fetch(`http://${window.location.hostname}:8000/inventory/purchase-orders`, {
           method: "POST",
           headers: {
@@ -301,7 +317,7 @@ export function Inventory() {
           unit: restockItem.unit,
         });
         alert(
-          `Logistics network alerted. Transfer from ${option.source_name} is now IN TRANSIT.`,
+          `Logistics network alerted. Transfer from ${option.source_name} is now IN TRANSIT.`
         );
       }
 
@@ -522,7 +538,6 @@ export function Inventory() {
         brand: newItem.brand.trim(),
         quantity: Number(newItem.quantity),
         unit: newItem.unit,
-        // The backend overrides this automatically anyway, but we pass the default here.
         status: newItem.status, 
         fsn_status: newItem.fsn_status,
         site_id: Number(newItem.site_id),
@@ -894,10 +909,7 @@ export function Inventory() {
             />
           )}
 
-          {/* --- FIX: THIS IS THE UPDATED FORM BLOCK --- 
-            Notice the grid is now md:grid-cols-5 instead of md:grid-cols-6
-            and the dropdown for "Initial Tag" has been permanently removed!
-          */}
+          {/* Form UI with Dropdown successfully removed */}
           {showAddForm && (
             <div className="bg-white p-6 rounded-xl border border-emerald-200 shadow-sm animate-in slide-in-from-top-4">
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4 pb-4 border-b border-neutral-100">
@@ -1027,8 +1039,6 @@ export function Inventory() {
                     </select>
                   </div>
                 </div>
-
-                {/* THE STATUS DROPDOWN USED TO BE HERE. IT IS NOW DELETED. */}
 
                 <button
                   type="submit"
@@ -1841,38 +1851,61 @@ export function Inventory() {
         createPortal(
           <div className="fixed inset-0 bg-black/60 z-[9999] flex items-center justify-center p-4 animate-in fade-in">
             <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[80vh]">
-              <div className="p-4 border-b bg-amber-50 border-amber-200 flex justify-between items-center text-amber-900">
+              <div className="p-4 border-b bg-slate-900 border-slate-800 flex justify-between items-center text-white">
                 <h2 className="text-lg font-bold flex items-center gap-2">
-                  ⚡ AI Operations: Restock Advisory
+                  <Sparkles className="w-5 h-5 text-emerald-400" /> Logistics Advisor
                 </h2>
                 <button
                   onClick={() => setShowRestockModal(false)}
-                  className="p-1 hover:bg-amber-200/50 rounded-md transition-colors"
+                  className="p-1 hover:bg-white/10 rounded-md transition-colors"
                 >
                   <X className="w-5 h-5" />
                 </button>
               </div>
 
               <div className="p-6 overflow-y-auto flex-1 bg-neutral-50">
-                <div className="mb-6 bg-white p-4 rounded-xl border border-neutral-200 shadow-sm">
-                  <p className="text-xs text-neutral-500 font-bold uppercase tracking-wider">
-                    Target Material
-                  </p>
-                  <p className="text-xl font-black text-neutral-900">
-                    {restockItem.item_name}
-                  </p>
-                  <p className="text-sm text-neutral-600 mt-1 font-medium">
-                    Calculating optimal logistics for 50 {restockItem.unit} to {restockItem.siteName}
-                  </p>
+                <div className="mb-6 bg-white p-4 rounded-xl border border-neutral-200 shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                  <div>
+                    <p className="text-xs text-neutral-500 font-bold uppercase tracking-wider">
+                      Target Material
+                    </p>
+                    <p className="text-xl font-black text-neutral-900">
+                      {restockItem.item_name}
+                    </p>
+                    <p className="text-sm text-neutral-600 mt-1 font-medium">
+                      Site: {restockItem.siteName} • Current Stock: {restockItem.quantity}
+                    </p>
+                  </div>
+                  
+                  <div className="bg-neutral-50 p-3 rounded-lg border border-neutral-200 w-full md:w-auto">
+                    <label className="block text-xs font-bold text-neutral-500 uppercase mb-1">Target Restock Qty</label>
+                    <div className="flex items-center gap-2">
+                      <input 
+                        type="number" 
+                        min="1"
+                        value={restockQty}
+                        onChange={(e) => setRestockQty(Number(e.target.value))}
+                        className="w-24 p-2 border border-neutral-300 rounded-md text-lg font-bold text-center focus:ring-2 focus:ring-slate-900 outline-none"
+                      />
+                      <span className="font-bold text-neutral-500">{restockItem.unit}</span>
+                    </div>
+                  </div>
                 </div>
 
-                {isRestockLoading ? (
-                  <div className="py-12 text-center text-amber-600 font-bold animate-pulse">
-                    Running cost-analysis heuristic...
+                {restockOptions.length === 0 && !isRestockLoading && (
+                  <div className="text-center py-8">
+                    <button 
+                      onClick={runAdvisorCalculation}
+                      className="px-6 py-3 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-bold text-lg shadow-md transition-all flex items-center gap-2 mx-auto"
+                    >
+                      <Navigation className="w-5 h-5" /> Calculate Optimal Supply Route
+                    </button>
                   </div>
-                ) : restockOptions.length === 0 ? (
-                  <div className="py-12 text-center text-neutral-500 font-medium">
-                    No viable surplus or external suppliers found for this item.
+                )}
+
+                {isRestockLoading ? (
+                  <div className="py-12 text-center text-slate-700 font-bold animate-pulse">
+                    Calculating logistics and procurement costs...
                   </div>
                 ) : (
                   <div className="space-y-4">
@@ -1886,7 +1919,7 @@ export function Inventory() {
                             <div className="flex items-center gap-2 mb-1">
                               {index === 0 && (
                                 <span className="bg-emerald-500 text-white text-[10px] px-2 py-0.5 rounded font-bold uppercase tracking-wider">
-                                  Top Recommendation
+                                  Recommended Path
                                 </span>
                               )}
                               <span
