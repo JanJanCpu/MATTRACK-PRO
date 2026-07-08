@@ -16,6 +16,7 @@ import {
   ShoppingCart,
   Package,
   MapPin,
+  ClipboardList, // Added for Requests
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import {
@@ -29,25 +30,31 @@ const navItems = [
     name: "Dashboard",
     path: "/",
     icon: LayoutDashboard,
-    allowedRoles: ["admin", "owner", "staff"],
+    allowedRoles: ["admin", "owner", "staff", "pm"],
   },
   {
     name: "Inventory & FSN",
     path: "/inventory",
     icon: Boxes,
-    allowedRoles: ["admin", "owner", "staff"],
+    allowedRoles: ["admin", "owner", "staff", "pm"],
+  },
+  {
+    name: "Material Requests",
+    path: "/requests",
+    icon: ClipboardList,
+    allowedRoles: ["admin", "owner", "pm", "staff"],
   },
   {
     name: "AI Advisory",
     path: "/advisory",
     icon: BrainCircuit,
-    allowedRoles: ["admin", "owner", "staff"],
+    allowedRoles: ["admin", "owner", "staff", "pm"],
   },
   {
     name: "Logistics",
     path: "/logistics",
     icon: Truck,
-    allowedRoles: ["admin", "owner", "staff"],
+    allowedRoles: ["admin", "owner", "staff", "pm"],
   },
   {
     name: "Projects",
@@ -59,7 +66,7 @@ const navItems = [
     name: "Suppliers",
     path: "/suppliers",
     icon: Store,
-    allowedRoles: ["admin", "owner", "staff"],
+    allowedRoles: ["admin", "owner", "staff", "pm"],
   },
   {
     name: "Team Access",
@@ -147,7 +154,8 @@ export function Layout() {
           setGlobalInventory(invData);
           setGlobalSites(sitesData);
 
-          if (currentUserRole === "staff" && currentUserId) {
+          // Accepts both 'staff' and 'pm' nomenclature from token
+          if (["staff", "pm"].includes(currentUserRole) && currentUserId) {
             const assignedSite = sitesData.find(
               (site) => site.manager_id === currentUserId
             );
@@ -423,7 +431,7 @@ export function Layout() {
 
           <div className="flex items-center gap-4">
             <div className="hidden lg:flex items-center gap-2 px-3 py-1.5 bg-slate-100 border border-slate-200 rounded-full text-xs font-bold text-slate-700">
-              {userRole === "staff" && pmSiteName ? (
+              {["staff", "pm"].includes(userRole) && pmSiteName ? (
                 <>
                   <MapPin className="w-3.5 h-3.5 text-emerald-600" />
                   Operating Context:{" "}

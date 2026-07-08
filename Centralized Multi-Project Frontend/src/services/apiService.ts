@@ -199,7 +199,7 @@ export const suppliersAPI = {
 export const advisoryAPI = {
   procure: (site_id: number, item_name: string) =>
     fetchAPI<ProcurementAdvice[]>(
-      `${BASE_URL}/advisory/procure/${site_id}/${item_name}`,
+      `${BASE_URL}/advisory/procure/${site_id}?item_name=${encodeURIComponent(item_name)}`,
     ),
 
   chat: (prompt: string, history: { role: string; content: string }[]) =>
@@ -208,8 +208,7 @@ export const advisoryAPI = {
       body: JSON.stringify({ message: prompt, context: { history } }),
     }),
 };
-
-// --- 6. MATERIAL REQUEST APIs ---
+// --- 6. MATERIAL REQUEST APIs (UPDATED FOR ADMIN BOTTLENECK) ---
 export const requestsAPI = {
   create: (item: Omit<MaterialRequest, "id">) =>
     fetchAPI<MaterialRequest>(`${BASE_URL}/requests/`, {
@@ -219,8 +218,11 @@ export const requestsAPI = {
 
   list: () => fetchAPI<MaterialRequest[]>(`${BASE_URL}/requests/`),
 
-  receive: (id: number) =>
-    fetchAPI(`${BASE_URL}/requests/${id}/receive`, { method: "POST" }),
+  updateStatus: (id: number, status: string) =>
+    fetchAPI<MaterialRequest>(`${BASE_URL}/requests/${id}/status`, {
+      method: "PATCH",
+      body: JSON.stringify({ status }),
+    }),
 };
 
 // --- 7. SYSTEM APIs ---

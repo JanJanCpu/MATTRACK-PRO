@@ -17,8 +17,10 @@ export interface Inventory {
   unit: string;
   status: string;
   site_id: number;
-  brand: string;      // <-- ADDED FOR LEDGER
-  fsn_status: string; // <-- ADDED FOR LEDGER
+  brand: string;                // <-- ADDED FOR LEDGER
+  fsn_status: string;           // <-- ADDED FOR LEDGER
+  baseline_quantity?: number;   // <-- ADDED: For the 10% dynamic logic
+  is_locked_status?: boolean;   // <-- ADDED: For the PM override logic
 }
 
 export interface Supplier {
@@ -34,9 +36,13 @@ export interface Supplier {
 export interface MaterialRequest {
   id: number;
   item_name: string;
+  brand: string;                // <-- FIX: Added this!
   quantity_needed: number;
+  unit: string;                 // <-- FIX: Added this!
   site_id: number;
   status: string;
+  requested_by_id?: number;     // <-- FIX: Added this!
+  created_at?: string;          // <-- FIX: Added this!
 }
 
 export interface InventoryGrouped {

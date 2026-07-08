@@ -906,6 +906,84 @@ def cancel_transfer(transfer_id: int, token: str = Depends(oauth2_scheme), db: S
     
     return {"status": "Success", "message": "Transfer cancelled and stock reverted to origin."}
 
+# --- NEW: MATERIAL REQUESTS (THE ADMIN BOTTLENECK WORKFLOW) ---
+@app.post("/requests/", response_model=schemas.RequestResponse, tags=["Requests"])
+def create_material_request(req: schemas.RequestCreate = Body(...), token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = payload.get("id")
+        username = payload.get("sub")
+    except jose.JWTError:
+        raise HTTPException(status_code=401, detail="Invalid Session")
+        
+    site = db.query(models.ProjectSite).filter(models.ProjectSite.id == req.site_id).first()
+    if not site: raise HTTPException(status_code=404, detail="Site not found")
+    
+    new_req = models.MaterialRequest(
+        item_name=normalize_item_name(req.item_name),
+        brand=normalize_item_name(req.brand),
+        quantity_needed=req.quantity_needed,
+        unit=req.unit,
+        site_id=req.site_id,
+        status="Pending",
+        requested_by_id=user_id
+    )
+    db.add(new_req)
+    
+    audit_msg = f"User [{username}]: Submitted Material Request for {req.quantity_needed} {req.unit} of {req.item_name}."
+    db.add(models.ActivityLog(user_id=user_id, action=audit_msg))
+    
+    # Notify Admins
+    admins = db.query(models.User).filter(models.User.role.in_(["admin", "owner"])).all()
+    for admin in admins:
+        db.add(models.Notification(user_id=admin.id, title="New Material Request", message=f"Site {site.site_name} needs {req.quantity_needed} {req.unit} of {req.item_name}.", link="/requests"))
+        
+    db.commit()
+    db.refresh(new_req)
+    return new_req
+
+@app.get("/requests/", response_model=List[schemas.RequestResponse], tags=["Requests"])
+def list_material_requests(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_role = payload.get("role", "").lower()
+        user_id = payload.get("id")
+    except jose.JWTError:
+        raise HTTPException(status_code=401, detail="Invalid Session")
+        
+    if user_role in ["admin", "owner"]:
+        return db.query(models.MaterialRequest).order_by(models.MaterialRequest.id.desc()).all()
+        
+    managed_sites = db.query(models.ProjectSite).filter(models.ProjectSite.manager_id == user_id).all()
+    managed_site_ids = [s.id for s in managed_sites]
+    return db.query(models.MaterialRequest).filter(models.MaterialRequest.site_id.in_(managed_site_ids)).order_by(models.MaterialRequest.id.desc()).all()
+
+@app.patch("/requests/{req_id}/status", response_model=schemas.RequestResponse, tags=["Requests"])
+def update_request_status(req_id: int, req_data: schemas.RequestStatusUpdate = Body(...), token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_role = payload.get("role", "").lower()
+        user_id = payload.get("id")
+    except jose.JWTError:
+        raise HTTPException(status_code=401, detail="Invalid Session")
+        
+    if user_role not in ["admin", "owner"]:
+        raise HTTPException(status_code=403, detail="Only Admins can update request statuses.")
+        
+    mat_req = db.query(models.MaterialRequest).filter(models.MaterialRequest.id == req_id).first()
+    if not mat_req: raise HTTPException(status_code=404, detail="Request not found.")
+    
+    mat_req.status = req_data.status
+    db.add(models.ActivityLog(user_id=user_id, action=f"Admin updated Request #{mat_req.id} status to '{req_data.status}'."))
+    
+    site = db.query(models.ProjectSite).filter(models.ProjectSite.id == mat_req.site_id).first()
+    if site and site.manager_id:
+        db.add(models.Notification(user_id=site.manager_id, title="Request Updated", message=f"Your request for {mat_req.item_name} is now: {req_data.status}.", link="/requests"))
+        
+    db.commit()
+    db.refresh(mat_req)
+    return mat_req
+
 # --- SUPPLIERS & PURCHASE ORDERS ---
 class PurchaseOrderCreate(BaseModel):
     supplier_id: int
@@ -1241,9 +1319,12 @@ def update_order_status(order_id: int, status: str = Body(..., embed=True), toke
     return {"status": "success", "new_status": order.status}
 
 # --- ADVISORY ENGINE & RAG CHATBOT ---
-@app.get("/advisory/auto-restock/{site_id}/{item_name}/{quantity_needed}", tags=["Advisory"])
+@app.get("/advisory/auto-restock/{site_id}", tags=["Advisory"])
 def get_smart_restock_options(site_id: int, item_name: str, quantity_needed: float, db: Session = Depends(get_db)):
     target_site = db.query(models.ProjectSite).filter(models.ProjectSite.id == site_id).first()
+    if not target_site:
+        raise HTTPException(status_code=404, detail="Target site not found.")
+
     norm_name = normalize_item_name(item_name)
     options = []
 
@@ -1264,7 +1345,7 @@ def get_smart_restock_options(site_id: int, item_name: str, quantity_needed: flo
             "source_id": source_site.id,
             "distance_km": round(dist, 2),
             "estimated_total_cost": est_cost,
-            "recommendation_reason": f"Surplus available. Logistics cost: ₱{est_cost}"
+            "recommendation_reason": f"Surplus available. Logistics cost: ₱{est_cost:,.2f}"
         })
 
     external_materials = db.query(models.SupplierMaterial).filter(
@@ -1274,6 +1355,8 @@ def get_smart_restock_options(site_id: int, item_name: str, quantity_needed: flo
 
     for mat in external_materials:
         supplier = db.query(models.Supplier).filter(models.Supplier.id == mat.supplier_id).first()
+        if not supplier: continue
+
         dist = compute_distance(target_site.latitude, target_site.longitude, supplier.latitude, supplier.longitude)
         est_cost = calculate_procurement_cost(mat.price, quantity_needed, dist)
         
@@ -1283,12 +1366,12 @@ def get_smart_restock_options(site_id: int, item_name: str, quantity_needed: flo
             "source_id": supplier.id,
             "distance_km": round(dist, 2),
             "estimated_total_cost": est_cost,
-            "recommendation_reason": f"Unit price ₱{mat.price}. Total cost with delivery: ₱{est_cost}"
+            "recommendation_reason": f"Unit price ₱{mat.price:,.2f}. Total cost with delivery: ₱{est_cost:,.2f}"
         })
 
     return sorted(options, key=lambda x: x["estimated_total_cost"])
 
-@app.get("/advisory/procure/{site_id}/{item_name}", tags=["Advisory"])
+@app.get("/advisory/procure/{site_id}", tags=["Advisory"])
 def procure_advice(site_id: int, item_name: str, db: Session = Depends(get_db)):
     site = db.query(models.ProjectSite).filter(models.ProjectSite.id == site_id).first()
     if not site: raise HTTPException(status_code=404, detail="Site not found")
@@ -1403,3 +1486,95 @@ def chat_with_ai(req: ChatRequest = Body(...), db: Session = Depends(get_db), cu
 @app.get("/")
 def health_check():
     return {"status": "online", "system": "MatTrack PRO Core", "version": "2.3.0"}
+
+# --- ADVISORY ENGINE & RAG CHATBOT ---
+@app.get("/advisory/auto-restock/{site_id}/{item_name}/{quantity_needed}", tags=["Advisory"])
+def get_smart_restock_options(site_id: int, item_name: str, quantity_needed: float, db: Session = Depends(get_db)):
+    target_site = db.query(models.ProjectSite).filter(models.ProjectSite.id == site_id).first()
+    if not target_site:
+        raise HTTPException(status_code=404, detail="Target site not found.")
+
+    norm_name = normalize_item_name(item_name)
+    options = []
+
+    # 1. Search for Internal Surplus FIRST
+    surplus_items = db.query(models.Inventory).filter(
+        models.Inventory.item_name == norm_name,
+        models.Inventory.status == "Surplus",
+        models.Inventory.site_id != site_id
+    ).all()
+
+    for item in surplus_items:
+        source_site = db.query(models.ProjectSite).filter(models.ProjectSite.id == item.site_id).first()
+        dist = compute_distance(target_site.latitude, target_site.longitude, source_site.latitude, source_site.longitude)
+        est_cost = calculate_transfer_cost(dist) 
+        
+        options.append({
+            "type": "INTERNAL_TRANSFER",
+            "source_name": source_site.site_name,
+            "source_id": source_site.id,
+            "distance_km": round(dist, 2),
+            "estimated_total_cost": est_cost,
+            "recommendation_reason": f"Surplus available. Logistics cost: ₱{est_cost:,.2f}"
+        })
+
+    # 2. Search External Suppliers
+    external_materials = db.query(models.SupplierMaterial).filter(
+        models.SupplierMaterial.material_name == norm_name,
+        models.SupplierMaterial.stock_level.in_(["Available", "High", "Medium"])
+    ).all()
+
+    for mat in external_materials:
+        supplier = db.query(models.Supplier).filter(models.Supplier.id == mat.supplier_id).first()
+        if not supplier: continue
+
+        dist = compute_distance(target_site.latitude, target_site.longitude, supplier.latitude, supplier.longitude)
+        est_cost = calculate_procurement_cost(mat.price, quantity_needed, dist)
+        
+        options.append({
+            "type": "EXTERNAL_PURCHASE",
+            "source_name": supplier.name,
+            "source_id": supplier.id,
+            "distance_km": round(dist, 2),
+            "estimated_total_cost": est_cost,
+            "recommendation_reason": f"Unit price ₱{mat.price:,.2f}. Total cost with delivery: ₱{est_cost:,.2f}"
+        })
+
+    # Sort by cheapest total estimated cost
+    return sorted(options, key=lambda x: x["estimated_total_cost"])
+
+@app.get("/advisory/procure/{site_id}/{item_name}", tags=["Advisory"])
+def procure_advice(site_id: int, item_name: str, db: Session = Depends(get_db)):
+    site = db.query(models.ProjectSite).filter(models.ProjectSite.id == site_id).first()
+    if not site: raise HTTPException(status_code=404, detail="Site not found")
+        
+    norm_name = normalize_item_name(item_name)
+    suppliers = db.query(models.Supplier).all()
+    recommendations = []
+    
+    for s in suppliers:
+        dist = compute_distance(site.latitude, site.longitude, s.latitude, s.longitude)
+        travel_time = get_real_travel_time(site.latitude, site.longitude, s.latitude, s.longitude)
+        
+        specific_material = db.query(models.SupplierMaterial).filter(
+            models.SupplierMaterial.supplier_id == s.id,
+            models.SupplierMaterial.material_name == norm_name
+        ).first()
+
+        actual_rating = specific_material.delivery_rating if (specific_material and hasattr(specific_material, 'delivery_rating') and specific_material.delivery_rating > 0) else s.quality_rating
+        predicted_score = (actual_rating * 10) - (dist * 1.5)
+        
+        if getattr(s, 'is_sister_company', False): predicted_score += 15
+        if specific_material: predicted_score += 5
+
+        recommendations.append({
+            "supplier": s.name, 
+            "distance_km": round(dist, 2), 
+            "travel_time_mins": travel_time,
+            "score": round(max(5, min(99, predicted_score)), 2), 
+            "contact": s.contact, 
+            "is_sister": getattr(s, 'is_sister_company', False),
+            "specific_match": bool(specific_material)
+        })
+            
+    return sorted(recommendations, key=lambda x: x['score'], reverse=True)

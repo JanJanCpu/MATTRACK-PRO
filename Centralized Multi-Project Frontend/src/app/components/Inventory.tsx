@@ -244,15 +244,16 @@ export function Inventory() {
     }
   };
 
-  const handleSmartRestock = async (item: InventoryWithCategory) => {
+ const handleSmartRestock = async (item: InventoryWithCategory) => {
     setRestockItem(item);
     setShowRestockModal(true);
     setIsRestockLoading(true);
 
     try {
       const defaultRestockQty = 50;
+      // FIX: Safely passing item_name and quantity_needed as query parameters to bypass the slash bug
       const response = await fetch(
-        `http://localhost:8000/advisory/auto-restock/${item.site_id}/${encodeURIComponent(item.item_name)}/${defaultRestockQty}`,
+        `http://${window.location.hostname}:8000/advisory/auto-restock/${item.site_id}?item_name=${encodeURIComponent(item.item_name)}&quantity_needed=${defaultRestockQty}`,
       );
 
       if (response.ok) {
@@ -265,7 +266,7 @@ export function Inventory() {
       setIsRestockLoading(false);
     }
   };
-
+  
   const handleExecuteRestock = async (option: any) => {
     if (!restockItem) return;
 
@@ -274,7 +275,8 @@ export function Inventory() {
 
     try {
       if (option.type === "EXTERNAL_PURCHASE") {
-        await fetch("http://localhost:8000/inventory/purchase-orders", {
+        // FIX: Replaced "localhost" with dynamic hostname so it works across Wi-Fi
+        await fetch(`http://${window.location.hostname}:8000/inventory/purchase-orders`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",

@@ -12,11 +12,12 @@ import { ProjectDetails } from "./components/ProjectDetails";
 import { Suppliers } from "./components/Suppliers";
 import { Settings } from "./components/Settings";
 import { UserManagement } from "./components/UserManagement";
-import { SellerPortal } from "./components/Seller"; // Added SellerPortal route
-
-// RESTORED NAMED IMPORT - WITH CURLY BRACES
+import { SellerPortal } from "./components/Seller"; 
 import { Login } from "./components/Login";
 import { SellerOrders } from "./components/SellerOrders";
+
+// --- NEW REQUESTS PAGE IMPORT ---
+import { Requests } from "./components/Requests";
 
 // --- STANDARD BOUNCER: Checks if you are logged in at all ---
 const PrivateRoute = ({ children }: { children: React.ReactNode }) => {
@@ -76,6 +77,16 @@ export const router = createBrowserRouter([
       { path: "logistics", Component: LogisticsMap },
       { path: "settings", Component: Settings },
 
+      // --- NEW MATERIAL REQUESTS ROUTE ---
+      {
+        path: "requests",
+        element: (
+          <RoleProtectedRoute allowedRoles={["admin", "owner", "pm", "staff"]}>
+            <Requests />
+          </RoleProtectedRoute>
+        ),
+      },
+
       // --- RESTRICTED ROUTES (Wrapped in the VIP Bouncer) ---
       {
         path: "projects",
@@ -94,10 +105,9 @@ export const router = createBrowserRouter([
         ),
       },
       {
-        // FIXED: PMs (staff) now have access to the Suppliers page to buy materials
         path: "suppliers",
         element: (
-          <RoleProtectedRoute allowedRoles={["admin", "owner", "staff"]}>
+          <RoleProtectedRoute allowedRoles={["admin", "owner", "staff", "pm"]}>
             <Suppliers />
           </RoleProtectedRoute>
         ),
@@ -118,7 +128,7 @@ export const router = createBrowserRouter([
           <div className="p-8 text-center text-gray-500">Page not found</div>
         ),
       },
-      // --- NEW SELLER PORTAL ROUTE ---
+      // --- SELLER ROUTES ---
       {
         path: "seller-portal",
         element: (
@@ -127,7 +137,6 @@ export const router = createBrowserRouter([
           </RoleProtectedRoute>
         ),
       },
-      // --- NEW SELLER ORDERS ROUTE ---
       {
         path: "seller-orders",
         element: (

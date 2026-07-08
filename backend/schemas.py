@@ -19,15 +19,12 @@ class UserCreate(UserBase):
     company_address: Optional[str] = None
     company_contact: Optional[str] = None
     company_website: Optional[str] = None
-
     supplier_id: Optional[int] = None
 
 class UserResponse(UserBase):
     id: int
     company_name: Optional[str] = None
-
     supplier_id: Optional[int] = None
-    
     class Config:
         from_attributes = True
 
@@ -46,7 +43,6 @@ class SessionResponse(BaseModel):
     created_at: str
     last_active: str
     is_current_session: bool = False 
-
     class Config:
         from_attributes = True
 
@@ -57,7 +53,6 @@ class ActivityLogResponse(BaseModel):
     action: str
     timestamp: str 
     is_security_event: bool = False 
-
     class Config:
         from_attributes = True
 
@@ -70,7 +65,6 @@ class NotificationResponse(BaseModel):
     link: Optional[str] = None 
     is_read: bool
     created_at: str 
-
     class Config:
         from_attributes = True
 
@@ -79,7 +73,6 @@ class SiteBase(BaseModel):
     name: str = Field(..., alias="site_name") 
     lat: float = Field(..., alias="latitude")
     lon: float = Field(..., alias="longitude")
-
     class Config:
         populate_by_name = True 
 
@@ -92,7 +85,6 @@ class SiteCreate(BaseModel):
 
 class SiteProgressUpdate(BaseModel):
     stage_status: str
-    progress_percentage: int
 
 class ProjectStatusUpdate(BaseModel):
     stage_status: str
@@ -106,7 +98,6 @@ class SiteResponse(BaseModel):
     stage_status: Optional[str] = None 
     progress_percentage: int = 0 
     manager_id: Optional[int] = None 
-
     class Config:
         from_attributes = True
 
@@ -119,9 +110,10 @@ class InventoryBase(BaseModel):
     status: str
     fsn_status: str = "FAST"
     site_id: int
-    
     supplier_id: Optional[int] = None
     batch_rating: Optional[float] = None
+    baseline_quantity: Optional[float] = 0.0
+    is_locked_status: Optional[bool] = False
 
 class InventoryCreate(InventoryBase):
     pass
@@ -130,7 +122,6 @@ class InventoryResponse(InventoryBase):
     id: int
     updated_at: datetime 
     baseline_quantity: float
-    
     class Config:
         from_attributes = True
 
@@ -152,17 +143,13 @@ class SupplierMaterialCreate(BaseModel):
 class SupplierMaterialResponse(SupplierMaterialBase):
     id: int
     supplier_id: int
-    
-    # --- NEW: Added fields so Pydantic allows the data to reach the frontend ---
     brand: Optional[str] = "Generic/No Brand"
     quantity: Optional[float] = 0.0
     unit: Optional[str] = "Pcs"
-    # -------------------------------------------------------------------------
-
     class Config:
         from_attributes = True
 
-# --- SUPPLIER ---
+# --- SUPPLIERS ---
 class SupplierBase(BaseModel):
     name: str
     contact: str
@@ -170,7 +157,6 @@ class SupplierBase(BaseModel):
     lon: float = Field(..., alias="longitude")
     rating: float = Field(..., alias="quality_rating")
     is_sister_company: bool = False
-
     class Config:
         populate_by_name = True
 
@@ -194,21 +180,26 @@ class SupplierResponse(BaseModel):
     quality_rating: float
     is_sister_company: bool
     address: Optional[str] = None
-    
     materials: List[SupplierMaterialResponse] = []
-
     class Config:
         from_attributes = True
 
-# --- REQUESTS ---
+# --- MATERIAL REQUESTS ---
 class RequestCreate(BaseModel):
     item_name: str
-    quantity_needed: int
+    brand: str = "Generic/No Brand"
+    quantity_needed: float
+    unit: str = "Pcs"
     site_id: int
+
+class RequestStatusUpdate(BaseModel):
+    status: str
 
 class RequestResponse(RequestCreate):
     id: int
     status: str
+    requested_by_id: Optional[int] = None
+    created_at: datetime
     class Config:
         from_attributes = True
 
@@ -232,6 +223,12 @@ class TransferResponse(BaseModel):
     status: str
     dispatched_at: datetime
     received_at: Optional[datetime] = None
-
     class Config:
         from_attributes = True
+
+class PurchaseOrderCreate(BaseModel):
+    supplier_id: int
+    site_id: int
+    material_name: str
+    quantity: float
+    total_price: float
