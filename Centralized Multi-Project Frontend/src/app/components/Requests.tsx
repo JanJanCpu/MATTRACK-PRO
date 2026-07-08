@@ -4,7 +4,7 @@ import {
   ClipboardList, Plus, Clock, CheckCircle, XCircle, Truck, Building2,
   Sparkles, Loader, PackageOpen, Navigation, X, AlertTriangle, Send, Lock, Trash2
 } from "lucide-react";
-import { requestsAPI, sitesAPI, purchaseOrdersAPI, transferAPI } from "../../services/apiService";
+import { requestsAPI, sitesAPI, purchaseOrdersAPI, transferAPI, procurementAPI } from "../../services/apiService";
 import type { MaterialRequest, ProjectSite } from "../../types";
 import { useNavigate, useLocation } from "react-router-dom";
 
@@ -24,6 +24,12 @@ export function Requests() {
   const [formData, setFormData] = useState({
     item_name: "", brand: "Generic/No Brand", quantity_needed: "", unit: "Pcs", site_id: "",
   });
+
+  // --- NEW ERP SOURCING STATE ---
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [showDropdown, setShowDropdown] = useState(false);
 
   const [showAdvisorModal, setShowAdvisorModal] = useState(false);
   const [activeRequest, setActiveRequest] = useState<MaterialRequest | null>(null);
@@ -64,10 +70,44 @@ export function Requests() {
         ...prev, item_name: item.item_name, brand: item.brand || "Generic/No Brand",
         unit: item.unit || "Pcs", quantity_needed: suggestedQty.toString(), site_id: item.site_id.toString()
       }));
+      setSearchQuery(item.item_name);
       setShowForm(true);
       navigate(location.pathname, { replace: true, state: {} });
     }
   }, [location.state, navigate]);
+
+  // --- GLOBAL SOURCING DISCOVERY ENGINE ---
+  useEffect(() => {
+    if (!searchQuery || searchQuery.length < 2 || !formData.site_id) {
+      setSearchResults([]);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      setIsSearching(true);
+      try {
+        const res = await procurementAPI.discover(Number(formData.site_id), searchQuery);
+        setSearchResults(res);
+        setShowDropdown(true);
+      } catch (e) {
+        console.error("Sourcing engine error", e);
+      } finally {
+        setIsSearching(false);
+      }
+    }, 400);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery, formData.site_id]);
+
+  const handleSelectResult = (res: any) => {
+    setFormData({
+      ...formData,
+      item_name: res.material_name,
+      brand: res.brand,
+      unit: res.unit
+    });
+    setSearchQuery(res.material_name);
+    setShowDropdown(false);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -81,6 +121,7 @@ export function Requests() {
       alert("Material Request submitted to the Main Office.");
       setShowForm(false);
       setFormData({ item_name: "", brand: "Generic/No Brand", quantity_needed: "", unit: "Pcs", site_id: formData.site_id });
+      setSearchQuery("");
       fetchData();
     } catch (error) { alert("Failed to submit request."); } finally { setIsSubmitting(false); }
   };
@@ -93,7 +134,7 @@ export function Requests() {
   };
 
   const handleDeleteRequest = async (reqId: number) => {
-    if (!window.confirm("Are you sure you want to permanently delete this request from the queue?")) return;
+    if (!window.confirm("SECURITY WARNING:\n\nAre you sure you want to permanently delete this request from the queue?")) return;
     try {
       await requestsAPI.delete(reqId);
       fetchData();
@@ -178,11 +219,54 @@ export function Requests() {
                 {editableSites.map(site => ( <option key={site.id} value={site.id}>{site.site_name}</option> ))}
               </select>
             </div>
-            <div className="md:col-span-2">
-              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Material Name</label>
-              <input type="text" required placeholder="e.g. Portland Cement" value={formData.item_name} onChange={(e) => setFormData({ ...formData, item_name: e.target.value })} className="w-full p-2 border rounded-lg text-sm bg-slate-50 focus:ring-2 focus:ring-slate-900 outline-none" />
+            
+            {/* --- NEW B2B SOURCING DISCOVERY ENGINE UI --- */}
+            <div className="md:col-span-2 relative">
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-1 flex items-center gap-1">
+                Material Search (Global Sourcing) {isSearching && <Loader className="w-3 h-3 animate-spin text-emerald-500"/>}
+              </label>
+              <input 
+                type="text" 
+                required 
+                disabled={!formData.site_id}
+                placeholder={formData.site_id ? "Search supplier network..." : "Select project site first..."} 
+                value={searchQuery || formData.item_name} 
+                onChange={(e) => {
+                  setSearchQuery(e.target.value);
+                  setFormData({ ...formData, item_name: e.target.value });
+                  setShowDropdown(true);
+                }} 
+                onFocus={() => { if(searchResults.length > 0) setShowDropdown(true); }}
+                className={`w-full p-2 border rounded-lg text-sm bg-slate-50 focus:ring-2 focus:ring-slate-900 outline-none ${!formData.site_id && "cursor-not-allowed opacity-70"}`} 
+              />
+              
+              {showDropdown && searchResults.length > 0 && (
+                <div className="absolute z-50 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-2xl max-h-64 overflow-y-auto top-full left-0">
+                  <div className="sticky top-0 bg-slate-100 px-3 py-2 border-b border-slate-200 text-[10px] font-bold text-slate-500 uppercase tracking-wider flex justify-between">
+                    <span>Sourcing Engine Matches</span>
+                    <button type="button" onClick={() => setShowDropdown(false)}><X className="w-3.5 h-3.5 hover:text-red-500" /></button>
+                  </div>
+                  {searchResults.map((res, i) => (
+                    <div key={i} onClick={() => handleSelectResult(res)} className="p-3 border-b border-slate-100 hover:bg-emerald-50 cursor-pointer transition-colors group">
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <p className="text-sm font-bold text-slate-900 group-hover:text-emerald-700">{res.material_name}</p>
+                          <p className="text-xs text-slate-500 mt-0.5 font-medium">
+                            {res.brand} • <span className={res.is_internal ? "text-indigo-600 font-bold" : "text-amber-600 font-bold"}>{res.supplier_name}</span> {res.is_internal && "(Internal)"}
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-sm font-black text-emerald-600">{res.available_qty} <span className="text-[10px]">{res.unit}</span></p>
+                          <p className="text-[10px] text-slate-400 mt-0.5 font-bold">{res.distance_km} km away</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-            <div className="md:col-span-2">
+
+            <div className="md:col-span-1">
               <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Brand/Specs</label>
               <input type="text" placeholder="e.g. Republic" value={formData.brand} onChange={(e) => setFormData({ ...formData, brand: e.target.value })} className="w-full p-2 border rounded-lg text-sm bg-slate-50 focus:ring-2 focus:ring-slate-900 outline-none" />
             </div>
@@ -196,8 +280,8 @@ export function Requests() {
                 <option value="Bags">Bags</option><option value="Pcs">Pcs</option><option value="Cu.m">Cu.m</option><option value="Kilos">Kilos</option><option value="Unit">Unit</option>
               </select>
             </div>
-            <div className="md:col-span-4 flex justify-end mt-2">
-              <button type="submit" disabled={isSubmitting} className="bg-slate-900 text-white px-6 py-2.5 rounded-lg font-bold hover:bg-slate-800 transition-colors flex items-center justify-center gap-2">
+            <div className="md:col-span-2 flex justify-end mt-2">
+              <button type="submit" disabled={isSubmitting} className="w-full bg-slate-900 text-white px-6 py-2.5 rounded-lg font-bold hover:bg-slate-800 transition-colors flex items-center justify-center gap-2">
                 {isSubmitting ? <Loader className="w-4 h-4 animate-spin" /> : <><Send className="w-4 h-4"/> Submit Request to Admin</>}
               </button>
             </div>

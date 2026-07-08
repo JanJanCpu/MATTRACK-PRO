@@ -100,6 +100,12 @@ export const advisoryAPI = {
   chat: (prompt: string, history: { role: string; content: string }[]) => fetchAPI<any>(`${BASE_URL}/advisory/chat`, { method: "POST", body: JSON.stringify({ message: prompt, context: { history } }) }),
 };
 
+// --- NEW: PROCUREMENT GLOBAL DISCOVERY APIs ---
+export const procurementAPI = {
+  discover: (site_id: number, query: string) => fetchAPI<any[]>(`${BASE_URL}/procurement/discover?site_id=${site_id}&query=${encodeURIComponent(query)}`),
+  getRecentSuppliers: () => fetchAPI<any[]>(`${BASE_URL}/suppliers/recent`),
+};
+
 // --- 6. MATERIAL REQUEST APIs (ERP UPGRADED) ---
 export const requestsAPI = {
   create: (item: Omit<MaterialRequest, "id">) => fetchAPI<MaterialRequest>(`${BASE_URL}/requests/`, { method: "POST", body: JSON.stringify(item) }),
@@ -113,21 +119,17 @@ export const requestsAPI = {
   list: () => fetchAPI<MaterialRequest[]>(`${BASE_URL}/requests/`),
   updateStatus: (id: number, status: string) => fetchAPI<MaterialRequest>(`${BASE_URL}/requests/${id}/status`, { method: "PATCH", body: JSON.stringify({ status }) }),
   
-  // ADD THIS LINE:
   delete: (id: number) => fetchAPI(`${BASE_URL}/requests/${id}`, { method: "DELETE" }),
 };
 
-// --- 6.5 PURCHASE ORDERS (NEW) ---
+// --- 6.5 PURCHASE ORDERS ---
 export const purchaseOrdersAPI = {
   create: (data: any) => fetchAPI(`${BASE_URL}/inventory/purchase-orders`, { method: "POST", body: JSON.stringify(data) }),
   list: () => fetchAPI<any[]>(`${BASE_URL}/inventory/purchase-orders`),
-  
-  // FIX: Added rating payload here
   receive: (id: number, rating: number) => fetchAPI(`${BASE_URL}/inventory/purchase-orders/${id}/receive`, { 
     method: "POST",
     body: JSON.stringify({ rating })
   }),
-  
   cancel: (id: number) => fetchAPI(`${BASE_URL}/inventory/purchase-orders/${id}/cancel`, { method: "POST" }),
 };
 

@@ -1,7 +1,8 @@
-from fastapi import FastAPI, Depends, HTTPException, status, Request, Body
+from fastapi import FastAPI, Depends, HTTPException, status, Request, Body, Query
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from typing import List, Optional
 from pydantic import BaseModel, Field
 import math
@@ -24,7 +25,7 @@ load_dotenv()
 import models, schemas
 from database import engine, get_db
 
-app = FastAPI(title="MatTrack PRO API", version="2.4.0")
+app = FastAPI(title="MatTrack PRO API", version="2.5.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -38,24 +39,19 @@ models.Base.metadata.create_all(bind=engine)
 
 SECRET_KEY = os.environ.get("SECRET_KEY", "SUPER_SECRET_SECURITY_TOKEN_REPLACE_THIS_FOR_PRODUCTION")
 ALGORITHM = "HS256"
-
 PH_TZ = timezone('Asia/Manila')
 
 def get_local_time_string(dt_object):
     if not dt_object: return "Unknown Time"
-    if dt_object.tzinfo is None:
-        dt_object = dt_object.replace(tzinfo=dt_timezone.utc)
+    if dt_object.tzinfo is None: dt_object = dt_object.replace(tzinfo=dt_timezone.utc)
     local_dt = dt_object.astimezone(PH_TZ)
     return local_dt.strftime("%b %d, %Y - %I:%M %p")
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
-def hash_password(password: str):
-    return pwd_context.hash(password)
-
-def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
+def hash_password(password: str): return pwd_context.hash(password)
+def verify_password(plain_password, hashed_password): return pwd_context.verify(plain_password, hashed_password)
 
 def create_access_token(data: dict):
     to_encode = data.copy()
@@ -63,10 +59,7 @@ def create_access_token(data: dict):
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
-# --- HELPER: LAYER 2 STRING NORMALIZATION ---
-def normalize_item_name(name: str) -> str:
-    """Guarantees strict case and whitespace standardization across all project ledgers."""
-    return name.strip().lower() if name else ""
+def normalize_item_name(name: str) -> str: return name.strip().lower() if name else ""
 
 def compute_distance(lat1, lon1, lat2, lon2):
     R = 6371 
@@ -81,8 +74,7 @@ def get_real_travel_time(lat1, lon1, lat2, lon2):
     try:
         response = requests.get(url, timeout=2).json()
         return round(response['routes'][0]['duration'] / 60, 2)
-    except:
-        return None 
+    except: return None 
     
 def calculate_transfer_cost(distance_km: float):
     FUEL_PRICE_PHP = 65.00
@@ -97,17 +89,13 @@ def calculate_procurement_cost(unit_price: float, quantity: float, distance_km: 
     delivery_fee = distance_km * SUPPLIER_DELIVERY_RATE
     return round(material_cost + delivery_fee, 2)
 
-# --- HELPER: DYNAMIC INVENTORY THRESHOLDS ---
-def get_dynamic_status(quantity: float, baseline: float, current_status: str) -> str:
-    if current_status in ["Sufficient", "Surplus", "Depleted"]:
-        return current_status
-    if quantity <= 0:
-        return "Critical"
-    if quantity <= (baseline * 0.10):
-        return "Low Stock"
-    return "In Stock"
+# --- TERMINOLOGY UPDATE: "Depleted" -> "Fully Utilized" OR "Out of Stock" ---
+def get_dynamic_status(quantity: float, baseline: float, current_status: str, is_asset: bool = False) -> str:
+    if current_status in ["Sufficient", "Surplus"]: return current_status
+    if quantity <= 0: return "Fully Utilized" if is_asset else "Out of Stock"
+    if quantity <= (baseline * 0.10): return "Low Stock"
+    return "Available" if is_asset else "In Stock"
 
-# --- DYNAMIC SCHEMA OVERRIDES ---
 class CatalogItemOut(BaseModel):
     id: int
     supplier_id: int
@@ -118,8 +106,7 @@ class CatalogItemOut(BaseModel):
     price: float
     stock_level: str
     delivery_rating: float
-    class Config:
-        from_attributes = True
+    class Config: from_attributes = True
 
 class SupplierOut(BaseModel):
     id: int
@@ -131,16 +118,34 @@ class SupplierOut(BaseModel):
     is_sister_company: bool
     address: Optional[str] = None
     materials: List[CatalogItemOut] = []
-    class Config:
-        from_attributes = True
+    class Config: from_attributes = True
+
+class GlobalSourcingResult(BaseModel):
+    supplier_id: int
+    supplier_name: str
+    contact: str
+    is_internal: bool
+    distance_km: float
+    material_name: str
+    brand: str
+    available_qty: float
+    unit: str
+    unit_price: float
+    delivery_rating: float
+
+class SellerMaterialCreate(BaseModel):
+    material_name: str
+    brand: str = "Generic/No Brand"
+    quantity: float = 0.0
+    unit: str = "Pcs"
+    price: float
+    stock_level: str
 
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username: str = payload.get("sub")
-    except jose.JWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
-    
+    except jose.JWTError: raise HTTPException(status_code=401, detail="Invalid token")
     user = db.query(models.User).filter(models.User.username == username).first()
     if not user: raise HTTPException(status_code=404, detail="User not found")
     return user
@@ -149,14 +154,9 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
 @app.post("/register", response_model=schemas.UserResponse, tags=["Auth"])
 def register_user(user: schemas.UserCreate = Body(...), db: Session = Depends(get_db)):
     db_user = db.query(models.User).filter(models.User.username == user.username).first()
-    if db_user:
-        raise HTTPException(status_code=400, detail="Username already registered")
-    
+    if db_user: raise HTTPException(status_code=400, detail="Username already registered")
     hashed = hash_password(user.password)
-    new_user = models.User(
-        username=user.username, email=user.email, hashed_password=hashed,
-        role=user.role, company_name=user.company_name, supplier_id=getattr(user, 'supplier_id', None)
-    )
+    new_user = models.User(username=user.username, email=user.email, hashed_password=hashed, role=user.role, company_name=user.company_name, supplier_id=getattr(user, 'supplier_id', None))
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
@@ -167,28 +167,23 @@ def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends(), db
     user = db.query(models.User).filter(models.User.username == form_data.username).first()
     client_ip = request.client.host if request.client else "Unknown IP"
     user_agent = request.headers.get("user-agent", "Unknown Device")
-
     if not user or not verify_password(form_data.password, user.hashed_password):
         if user:
             db.add(models.ActivityLog(user_id=user.id, action=f"Failed login attempt from IP: {client_ip}", is_security_event=True))
             db.commit()
         raise HTTPException(status_code=400, detail="Incorrect username or password")
-    
     session_token = str(uuid.uuid4())
     token = create_access_token({"sub": user.username, "role": user.role, "id": user.id, "session": session_token})
-    
     db.add(models.ActiveSession(user_id=user.id, token=session_token, device_info=user_agent[:250], ip_address=client_ip))
     db.add(models.ActivityLog(user_id=user.id, action=f"Successful login. New session created for {client_ip}.", is_security_event=True))
     db.commit()
     return {"access_token": token, "token_type": "bearer"}
 
 @app.get("/users/me", response_model=schemas.UserResponse, tags=["Auth"])
-def read_users_me(current_user: models.User = Depends(get_current_user)):
-    return current_user
+def read_users_me(current_user: models.User = Depends(get_current_user)): return current_user
 
 @app.get("/users/managers", response_model=List[schemas.UserResponse], tags=["Users"])
-def get_managers(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
-    return db.query(models.User).filter(models.User.role == "staff").all()
+def get_managers(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)): return db.query(models.User).filter(models.User.role == "staff").all()
 
 # --- SECURITY SETTINGS ---
 @app.patch("/users/password", tags=["Security"])
@@ -197,7 +192,6 @@ def update_password(req: schemas.PasswordUpdate = Body(...), current_user: model
         db.add(models.ActivityLog(user_id=current_user.id, action="Failed password update attempt (Incorrect current password).", is_security_event=True))
         db.commit()
         raise HTTPException(status_code=400, detail="Incorrect current password.")
-        
     current_user.hashed_password = hash_password(req.new_password)
     db.add(models.ActivityLog(user_id=current_user.id, action="Account password successfully updated.", is_security_event=True))
     db.commit()
@@ -207,23 +201,14 @@ def update_password(req: schemas.PasswordUpdate = Body(...), current_user: model
 def get_active_sessions(token: str = Depends(oauth2_scheme), current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
     current_token: str = payload.get("session")
-        
     sessions = db.query(models.ActiveSession).filter(models.ActiveSession.user_id == current_user.id).all()
-    return [{
-        "id": s.id, "device_info": s.device_info, "ip_address": s.ip_address,
-        "created_at": get_local_time_string(s.created_at), "last_active": get_local_time_string(s.last_active),
-        "is_current_session": s.token == current_token
-    } for s in sessions]
+    return [{"id": s.id, "device_info": s.device_info, "ip_address": s.ip_address, "created_at": get_local_time_string(s.created_at), "last_active": get_local_time_string(s.last_active), "is_current_session": s.token == current_token} for s in sessions]
 
 @app.delete("/users/sessions", tags=["Security"])
 def revoke_other_sessions(token: str = Depends(oauth2_scheme), current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
     current_token: str = payload.get("session")
-        
-    db.query(models.ActiveSession).filter(
-        models.ActiveSession.user_id == current_user.id, models.ActiveSession.token != current_token
-    ).delete()
-    
+    db.query(models.ActiveSession).filter(models.ActiveSession.user_id == current_user.id, models.ActiveSession.token != current_token).delete()
     db.add(models.ActivityLog(user_id=current_user.id, action="Emergency Revocation: Terminated all other active sessions.", is_security_event=True))
     db.commit()
     return {"status": "success", "message": "All other sessions forcefully disconnected."}
@@ -240,9 +225,7 @@ def list_sites(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db
 
 @app.post("/sites/", response_model=schemas.SiteResponse, tags=["Sites"])
 def create_site(site: schemas.SiteCreate = Body(...), current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if current_user.role not in ["admin", "owner"]:
-        raise HTTPException(status_code=403, detail="Unauthorized: Only Admins can create sites.")
-
+    if current_user.role not in ["admin", "owner"]: raise HTTPException(status_code=403, detail="Unauthorized.")
     new_site = models.ProjectSite(site_name=site.name, address=site.address, latitude=site.lat, longitude=site.lon, manager_id=site.manager_id)
     db.add(new_site)
     db.add(models.ActivityLog(user_id=current_user.id, action=f"User [{current_user.username}]: Created a new Project Site '{site.name}'.", is_security_event=False))
@@ -252,17 +235,13 @@ def create_site(site: schemas.SiteCreate = Body(...), current_user: models.User 
 
 @app.patch("/sites/{site_id}", response_model=schemas.SiteResponse, tags=["Sites"])
 def edit_site(site_id: int, name: str = Body(None), address: str = Body(None), manager_id: int = Body(None), current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if current_user.role not in ["admin", "owner"]:
-        raise HTTPException(status_code=403, detail="Unauthorized: Only Admins can edit site details.")
-
+    if current_user.role not in ["admin", "owner"]: raise HTTPException(status_code=403, detail="Unauthorized.")
     site = db.query(models.ProjectSite).filter(models.ProjectSite.id == site_id).first()
     if not site: raise HTTPException(status_code=404, detail="Site not found")
-    
     old_name = site.site_name
     if name: site.site_name = name
     if address: site.address = address
     if manager_id is not None: site.manager_id = manager_id
-    
     db.add(models.ActivityLog(user_id=current_user.id, action=f"User [{current_user.username}]: Modified Project Site settings for '{old_name}' (Site #{site_id}).", is_security_event=False))
     db.commit()
     db.refresh(site)
@@ -272,26 +251,18 @@ def edit_site(site_id: int, name: str = Body(None), address: str = Body(None), m
 def update_project_status(site_id: int, req: schemas.ProjectStatusUpdate = Body(...), current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     site = db.query(models.ProjectSite).filter(models.ProjectSite.id == site_id).first()
     if not site: raise HTTPException(status_code=404, detail="Site not found")
-    
-    if current_user.role == "staff" and site.manager_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Unauthorized: Only the assigned PM can update this project's status.")
-
+    if current_user.role == "staff" and site.manager_id != current_user.id: raise HTTPException(status_code=403, detail="Unauthorized.")
     valid_statuses = ["Pre Construction", "Mid Construction", "Finishing", "Post Construction"]
-    if req.stage_status not in valid_statuses:
-        raise HTTPException(status_code=400, detail="Invalid project stage.")
-
+    if req.stage_status not in valid_statuses: raise HTTPException(status_code=400, detail="Invalid project stage.")
     site.stage_status = req.stage_status
     db.commit()
     return {"status": "Success", "message": f"Project status advanced to {site.stage_status}"}
 
 @app.delete("/sites/{site_id}", tags=["Sites"])
 def soft_delete_site(site_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if current_user.role not in ["admin", "owner"]:
-        raise HTTPException(status_code=403, detail="Unauthorized: Only Admins can archive sites.")
-
+    if current_user.role not in ["admin", "owner"]: raise HTTPException(status_code=403, detail="Unauthorized.")
     site = db.query(models.ProjectSite).filter(models.ProjectSite.id == site_id).first()
     if not site: raise HTTPException(status_code=404, detail="Site not found")
-
     site.is_active = False
     db.add(models.ActivityLog(user_id=current_user.id, action=f"User [{current_user.username}]: SECURITY EVENT - Project Site '{site.site_name}' (Site #{site_id}) was securely archived.", is_security_event=True))
     db.commit()
@@ -305,10 +276,8 @@ def list_archived_sites(current_user: models.User = Depends(get_current_user), d
 @app.patch("/sites/{site_id}/restore", response_model=schemas.SiteResponse, tags=["Sites"])
 def restore_site(site_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     if current_user.role not in ["admin", "owner"]: raise HTTPException(status_code=403, detail="Unauthorized.")
-
     site = db.query(models.ProjectSite).filter(models.ProjectSite.id == site_id).first()
     if not site: raise HTTPException(status_code=404, detail="Site not found")
-
     site.is_active = True
     db.add(models.ActivityLog(user_id=current_user.id, action=f"Restored Project Site '{site.site_name}' (Site #{site_id}) from archives."))
     db.commit()
@@ -317,19 +286,18 @@ def restore_site(site_id: int, current_user: models.User = Depends(get_current_u
 
 # --- INVENTORY & AUDIT LOGGING ---
 @app.get("/inventory/", response_model=List[schemas.InventoryResponse], tags=["Inventory"])
-def list_inventory(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
-    return db.query(models.Inventory).all()
+def list_inventory(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)): return db.query(models.Inventory).all()
 
 @app.post("/inventory/log", tags=["Inventory"])
 def log_stock_transaction(transaction: schemas.InventoryBase = Body(...), current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     my_site = db.query(models.ProjectSite).filter(models.ProjectSite.id == transaction.site_id).first()
     if not my_site: raise HTTPException(status_code=404, detail="Site not found")
-    if current_user.role == "staff" and my_site.manager_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Unauthorized: You can only modify inventory for your assigned sites.")
+    if current_user.role == "staff" and my_site.manager_id != current_user.id: raise HTTPException(status_code=403, detail="Unauthorized.")
 
     norm_item_name = normalize_item_name(transaction.item_name)
     norm_brand = normalize_item_name(transaction.brand)
-    clean_status = "In Stock" if transaction.status.lower() == "healthy" else transaction.status
+    is_asset = transaction.unit in ["Unit", "Set"]
+    clean_status = "Available" if is_asset else "In Stock"
 
     item = db.query(models.Inventory).filter(
         models.Inventory.site_id == transaction.site_id, models.Inventory.item_name == norm_item_name, models.Inventory.brand == norm_brand
@@ -337,52 +305,31 @@ def log_stock_transaction(transaction: schemas.InventoryBase = Body(...), curren
 
     action_text = ""
     if item:
+        item.quantity += transaction.quantity
         if transaction.quantity > 0:
-            item.quantity += transaction.quantity
             item.baseline_quantity = item.quantity 
-            item.status = "In Stock" 
+            item.status = "Available" if is_asset else "In Stock"
             action_text = f"Restocked {norm_item_name} ({norm_brand}). New total baseline is {item.quantity} {transaction.unit}."
         else:
-            item.quantity += transaction.quantity
             action_text = f"Logged usage of {abs(transaction.quantity)} {transaction.unit} for {norm_item_name}."
-            
-        item.status = get_dynamic_status(item.quantity, item.baseline_quantity, item.status)
+        item.status = get_dynamic_status(item.quantity, item.baseline_quantity, item.status, is_asset)
     else:
         inv_data = transaction.dict(exclude={"supplier_id", "batch_rating"})
         inv_data['item_name'] = norm_item_name
         inv_data['brand'] = norm_brand
         inv_data['baseline_quantity'] = transaction.quantity
-        inv_data['status'] = get_dynamic_status(transaction.quantity, transaction.quantity, clean_status)
+        inv_data['status'] = get_dynamic_status(transaction.quantity, transaction.quantity, clean_status, is_asset)
         item = models.Inventory(**inv_data)
         db.add(item)
-        action_text = f"Registered initial 100% baseline for {transaction.quantity} {transaction.unit} of item: {norm_item_name}."
+        action_text = f"Registered initial baseline for {transaction.quantity} {transaction.unit} of item: {norm_item_name}."
 
     if hasattr(transaction, 'supplier_id') and transaction.supplier_id and hasattr(transaction, 'batch_rating') and transaction.batch_rating:
         sup_mat = db.query(models.SupplierMaterial).filter(models.SupplierMaterial.supplier_id == transaction.supplier_id, models.SupplierMaterial.material_name == norm_item_name).first()
-        if sup_mat:
-            sup_mat.delivery_rating = transaction.batch_rating if sup_mat.delivery_rating == 0.0 else (sup_mat.delivery_rating + transaction.batch_rating) / 2
-        else:
-            db.add(models.SupplierMaterial(supplier_id=transaction.supplier_id, material_name=norm_item_name, brand=norm_brand, delivery_rating=transaction.batch_rating, stock_level="Available"))
+        if sup_mat: sup_mat.delivery_rating = transaction.batch_rating if sup_mat.delivery_rating == 0.0 else (sup_mat.delivery_rating + transaction.batch_rating) / 2
+        else: db.add(models.SupplierMaterial(supplier_id=transaction.supplier_id, material_name=norm_item_name, brand=norm_brand, delivery_rating=transaction.batch_rating, stock_level="Available"))
         
-        supplier_info = db.query(models.Supplier).filter(models.Supplier.id == transaction.supplier_id).first()
-        sup_name = supplier_info.name if supplier_info else "Supplier"
-        action_text += f" (Rated delivery from {sup_name} as {transaction.batch_rating}/5 stars)."
-
     full_msg = f"User [{current_user.username}]: {action_text}"
     db.add(models.ActivityLog(user_id=current_user.id, action=full_msg))
-    db.add(models.Notification(user_id=current_user.id, title="Stock Updated", message=full_msg, link="/inventory"))
-    
-    if item.status == "Critical" or item.quantity <= 0:
-        admins = db.query(models.User).filter(models.User.role.in_(["admin", "owner"])).all()
-        recipients = set([a.id for a in admins])
-        for s in db.query(models.ProjectSite).all():
-            if s.id != my_site.id and s.manager_id and compute_distance(my_site.latitude, my_site.longitude, s.latitude, s.longitude) <= 15.0:
-                recipients.add(s.manager_id)
-        if current_user.id in recipients: recipients.remove(current_user.id)
-            
-        for r_id in recipients:
-            db.add(models.Notification(user_id=r_id, title="Nearby Critical Shortage", message=f"NETWORK ALERT: {my_site.site_name} is facing a critical shortage of {norm_item_name}. If you have surplus, please transfer.", link="/inventory"))
-
     db.commit()
     return {"status": "Success", "message": full_msg}
 
@@ -392,13 +339,13 @@ def override_inventory_status(item_id: int, req: schemas.InventoryStatusOverride
     if not item: raise HTTPException(status_code=404, detail="Item not found")
 
     site = db.query(models.ProjectSite).filter(models.ProjectSite.id == item.site_id).first()
-    if current_user.role == "staff" and (not site or site.manager_id != current_user.id):
-        raise HTTPException(status_code=403, detail="Unauthorized: Only the assigned PM can manage this inventory.")
+    if current_user.role == "staff" and (not site or site.manager_id != current_user.id): raise HTTPException(status_code=403, detail="Unauthorized.")
 
-    if req.status not in ["Sufficient", "Surplus", "Depleted"]: raise HTTPException(status_code=400, detail="Invalid status flag.")
+    valid_flags = ["Sufficient", "Surplus", "Fully Utilized", "Out of Stock"]
+    if req.status not in valid_flags: raise HTTPException(status_code=400, detail="Invalid status flag.")
 
     item.status = req.status
-    if req.status == "Depleted": item.quantity = 0.0 
+    if req.status in ["Fully Utilized", "Out of Stock"]: item.quantity = 0.0 
 
     db.add(models.ActivityLog(user_id=current_user.id, action=f"Manually flagged {item.item_name} as {req.status}."))
     db.commit()
@@ -409,25 +356,20 @@ def bulk_upload_inventory(items: List[schemas.InventoryBase] = Body(...), curren
     if current_user.role == "staff":
         for item_data in items:
             site = db.query(models.ProjectSite).filter(models.ProjectSite.id == item_data.site_id).first()
-            if not site or site.manager_id != current_user.id:
-                raise HTTPException(status_code=403, detail=f"SECURITY BLOCK: CSV contains data for Site ID {item_data.site_id} which you are not authorized to manage.")
+            if not site or site.manager_id != current_user.id: raise HTTPException(status_code=403, detail=f"SECURITY BLOCK: Unauthorized site ID {item_data.site_id}")
 
     added_count = 0
-    updated_materials = 0
-
     for item_data in items:
         norm_name = normalize_item_name(item_data.item_name)
         norm_brand = normalize_item_name(item_data.brand)
-        clean_status = "In Stock" if item_data.status.lower() == "healthy" else item_data.status
+        is_asset = item_data.unit in ["Unit", "Set"]
+        clean_status = "Available" if is_asset else "In Stock"
 
-        existing_item = db.query(models.Inventory).filter(
-            models.Inventory.site_id == item_data.site_id, models.Inventory.item_name == norm_name, models.Inventory.brand == norm_brand
-        ).first()
-
+        existing_item = db.query(models.Inventory).filter(models.Inventory.site_id == item_data.site_id, models.Inventory.item_name == norm_name, models.Inventory.brand == norm_brand).first()
         if existing_item:
             existing_item.quantity += item_data.quantity
             existing_item.baseline_quantity = existing_item.quantity
-            existing_item.status = get_dynamic_status(existing_item.quantity, existing_item.baseline_quantity, existing_item.status)
+            existing_item.status = get_dynamic_status(existing_item.quantity, existing_item.baseline_quantity, existing_item.status, is_asset)
         else:
             inv_data = item_data.dict(exclude={"supplier_id", "batch_rating"})
             inv_data['item_name'] = norm_name
@@ -435,21 +377,10 @@ def bulk_upload_inventory(items: List[schemas.InventoryBase] = Body(...), curren
             inv_data['status'] = clean_status
             inv_data['baseline_quantity'] = item_data.quantity
             db.add(models.Inventory(**inv_data))
-        
         added_count += 1
 
-        if item_data.supplier_id and item_data.batch_rating:
-            if db.query(models.Supplier).filter(models.Supplier.id == item_data.supplier_id).first():
-                sup_mat = db.query(models.SupplierMaterial).filter(models.SupplierMaterial.supplier_id == item_data.supplier_id, models.SupplierMaterial.material_name == norm_name).first()
-                if sup_mat:
-                    sup_mat.delivery_rating = item_data.batch_rating if sup_mat.delivery_rating == 0.0 else (sup_mat.delivery_rating + item_data.batch_rating) / 2
-                else:
-                    db.add(models.SupplierMaterial(supplier_id=item_data.supplier_id, material_name=norm_name, brand=norm_brand, delivery_rating=item_data.batch_rating, stock_level="Available"))
-                updated_materials += 1
-
-    action_msg = f"User [{current_user.username}]: Bulk received {added_count} items. Updated AI rating data for {updated_materials} valid supplier entries."
+    action_msg = f"User [{current_user.username}]: Bulk received {added_count} items."
     db.add(models.ActivityLog(user_id=current_user.id, action=action_msg))
-    db.add(models.Notification(user_id=current_user.id, title="Bulk Import Complete", message=action_msg, link="/inventory"))
     db.commit()
     return {"status": "Success", "message": action_msg}
 
@@ -464,14 +395,14 @@ def delete_inventory_item(item_id: int, current_user: models.User = Depends(get_
     if not db_item: raise HTTPException(status_code=404, detail="Item not found")
 
     site = db.query(models.ProjectSite).filter(models.ProjectSite.id == db_item.site_id).first()
-    if current_user.role == "staff" and (not site or site.manager_id != current_user.id):
-        raise HTTPException(status_code=403, detail="Unauthorized: Cannot delete inventory belonging to other sites.")
+    if current_user.role == "staff" and (not site or site.manager_id != current_user.id): raise HTTPException(status_code=403, detail="Unauthorized.")
 
     db.delete(db_item)
     db.commit()
     return {"status": "success", "message": f"Item {item_id} deleted"}
 
-# --- NOTIFICATIONS ---
+
+# --- RESTORED: NOTIFICATIONS ---
 @app.get("/notifications", tags=["Notifications"])
 def get_user_notifications(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     notifs = db.query(models.Notification).filter(models.Notification.user_id == current_user.id).order_by(models.Notification.id.desc()).limit(10).all()
@@ -495,106 +426,50 @@ def mark_all_notifications_read(current_user: models.User = Depends(get_current_
 # --- NEW ERP: MATERIAL REQUEST WORKFLOW ---
 @app.post("/requests/", response_model=schemas.RequestResponse, tags=["Requests"])
 def create_material_request(req: schemas.RequestCreate = Body(...), current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Manual request creation (For new items not in ledger). Restricted to PMs only."""
-    if current_user.role in ["admin", "owner"]:
-        raise HTTPException(status_code=403, detail="Admins cannot create requests. You fulfill them.")
-
+    if current_user.role in ["admin", "owner"]: raise HTTPException(status_code=403, detail="Admins cannot create requests. You fulfill them.")
     site = db.query(models.ProjectSite).filter(models.ProjectSite.id == req.site_id).first()
     if not site: raise HTTPException(404, detail="Site not found")
     
-    new_req = models.MaterialRequest(
-        item_name=normalize_item_name(req.item_name),
-        brand=normalize_item_name(req.brand),
-        quantity_needed=req.quantity_needed,
-        unit=req.unit,
-        site_id=req.site_id,
-        inventory_id=req.inventory_id,
-        status="Pending Approval",
-        requested_by_id=current_user.id
-    )
+    new_req = models.MaterialRequest(item_name=normalize_item_name(req.item_name), brand=normalize_item_name(req.brand), quantity_needed=req.quantity_needed, unit=req.unit, site_id=req.site_id, inventory_id=req.inventory_id, status="Pending Approval", requested_by_id=current_user.id)
     db.add(new_req)
-    db.add(models.ActivityLog(user_id=current_user.id, action=f"User [{current_user.username}]: Submitted Manual Request for {req.quantity_needed} {req.unit} of {req.item_name}."))
-    
-    # Notify Admins
-    for admin in db.query(models.User).filter(models.User.role.in_(["admin", "owner"])).all():
-        db.add(models.Notification(user_id=admin.id, title="New Material Request", message=f"Site {site.site_name} requested {req.quantity_needed} {req.unit} of {req.item_name}.", link="/requests"))
-        
     db.commit()
     db.refresh(new_req)
     return new_req
 
 @app.delete("/requests/{req_id}", tags=["Requests"])
 def delete_material_request(req_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if current_user.role not in ["admin", "owner"]:
-        raise HTTPException(status_code=403, detail="Only Admins can delete requests.")
-        
+    if current_user.role not in ["admin", "owner"]: raise HTTPException(status_code=403, detail="Only Admins can delete requests.")
     req = db.query(models.MaterialRequest).filter(models.MaterialRequest.id == req_id).first()
     if not req: raise HTTPException(status_code=404, detail="Request not found.")
-    
     db.delete(req)
-    db.add(models.ActivityLog(user_id=current_user.id, action=f"User [{current_user.username}]: Deleted Material Request REQ-{req_id:04d}."))
     db.commit()
     return {"status": "Success", "message": "Request permanently deleted."}
 
 @app.post("/requests/restock/{inventory_id}", response_model=schemas.RequestResponse, tags=["Requests"])
 def request_restock_from_inventory(inventory_id: int, req: schemas.RequestRestock = Body(...), current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """ERP Guided Replenishment: 1-Click Request from depleted Inventory Ledger."""
     if current_user.role in ["admin", "owner"]: raise HTTPException(403, detail="Admins cannot request restocks.")
-        
     inventory_item = db.query(models.Inventory).filter(models.Inventory.id == inventory_id).first()
     if not inventory_item: raise HTTPException(404, detail="Inventory item not found.")
-    
-    # Prevent duplicate active requests for the same exact item
-    existing_req = db.query(models.MaterialRequest).filter(
-        models.MaterialRequest.inventory_id == inventory_id, models.MaterialRequest.status.in_(["Pending Approval", "Approved & Routing"])
-    ).first()
+    existing_req = db.query(models.MaterialRequest).filter(models.MaterialRequest.inventory_id == inventory_id, models.MaterialRequest.status.in_(["Pending Approval", "Approved & Routing"])).first()
     if existing_req: raise HTTPException(400, detail="A restocking request is already active for this physical item.")
 
-    new_req = models.MaterialRequest(
-        item_name=inventory_item.item_name,
-        brand=inventory_item.brand,
-        quantity_needed=req.quantity_needed,
-        unit=inventory_item.unit,
-        site_id=inventory_item.site_id,
-        inventory_id=inventory_item.id,
-        status="Pending Approval",
-        requested_by_id=current_user.id
-    )
+    new_req = models.MaterialRequest(item_name=inventory_item.item_name, brand=inventory_item.brand, quantity_needed=req.quantity_needed, unit=inventory_item.unit, site_id=inventory_item.site_id, inventory_id=inventory_item.id, status="Pending Approval", requested_by_id=current_user.id)
     db.add(new_req)
-    
-    site = db.query(models.ProjectSite).filter(models.ProjectSite.id == inventory_item.site_id).first()
-    db.add(models.ActivityLog(user_id=current_user.id, action=f"User [{current_user.username}]: Initiated 1-Click Restock for {inventory_item.item_name} (Inv ID: {inventory_id})."))
-    
-    for admin in db.query(models.User).filter(models.User.role.in_(["admin", "owner"])).all():
-        db.add(models.Notification(user_id=admin.id, title="Critical Restock Request", message=f"{site.site_name} initiated a restock for depleted {inventory_item.item_name}.", link="/requests"))
-        
     db.commit()
     db.refresh(new_req)
     return new_req
 
 @app.get("/requests/", response_model=List[schemas.RequestResponse], tags=["Requests"])
 def list_material_requests(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if current_user.role in ["admin", "owner"]:
-        return db.query(models.MaterialRequest).order_by(models.MaterialRequest.id.desc()).all()
-        
+    if current_user.role in ["admin", "owner"]: return db.query(models.MaterialRequest).order_by(models.MaterialRequest.id.desc()).all()
     managed_sites = [s.id for s in db.query(models.ProjectSite).filter(models.ProjectSite.manager_id == current_user.id).all()]
     return db.query(models.MaterialRequest).filter(models.MaterialRequest.site_id.in_(managed_sites)).order_by(models.MaterialRequest.id.desc()).all()
 
 @app.patch("/requests/{req_id}/status", response_model=schemas.RequestResponse, tags=["Requests"])
 def update_request_status(req_id: int, req_data: schemas.RequestStatusUpdate = Body(...), current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if current_user.role not in ["admin", "owner"]:
-        raise HTTPException(status_code=403, detail="Only Admins can update request statuses.")
-        
+    if current_user.role not in ["admin", "owner"]: raise HTTPException(status_code=403, detail="Only Admins can update request statuses.")
     mat_req = db.query(models.MaterialRequest).filter(models.MaterialRequest.id == req_id).first()
-    if not mat_req: raise HTTPException(status_code=404, detail="Request not found.")
-    
     mat_req.status = req_data.status
-    db.add(models.ActivityLog(user_id=current_user.id, action=f"Admin updated Request #{mat_req.id} status to '{req_data.status}'."))
-    
-    site = db.query(models.ProjectSite).filter(models.ProjectSite.id == mat_req.site_id).first()
-    if site and site.manager_id:
-        db.add(models.Notification(user_id=site.manager_id, title="Request Updated", message=f"Your request for {mat_req.item_name} is now: {req_data.status}.", link="/requests"))
-        
     db.commit()
     db.refresh(mat_req)
     return mat_req
@@ -602,38 +477,24 @@ def update_request_status(req_id: int, req_data: schemas.RequestStatusUpdate = B
 # --- MATERIAL TRANSFERS & ROUTING ---
 @app.post("/transfers/initiate", tags=["Transfers"])
 def initiate_transfer(req: schemas.TransferCreate = Body(...), current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if current_user.role not in ["admin", "owner"]:
-        raise HTTPException(403, detail="ERP SECURITY: Only Admins can execute logistics transfers.")
-
+    if current_user.role not in ["admin", "owner"]: raise HTTPException(403, detail="ERP SECURITY: Only Admins can execute logistics transfers.")
     norm_name = normalize_item_name(req.item_name)
-    source_item = db.query(models.Inventory).filter(
-        models.Inventory.site_id == req.source_site_id, models.Inventory.item_name == norm_name, models.Inventory.brand == normalize_item_name(req.brand)
-    ).first()
+    source_item = db.query(models.Inventory).filter(models.Inventory.site_id == req.source_site_id, models.Inventory.item_name == norm_name, models.Inventory.brand == normalize_item_name(req.brand)).first()
 
     if not source_item or source_item.quantity < req.quantity: raise HTTPException(400, detail="Insufficient stock at source site.")
-    if source_item.status in ["Critical", "Low Stock"]: raise HTTPException(403, detail="Cannot dispatch from a site currently experiencing a shortage.")
 
     source_item.quantity -= req.quantity
-    if source_item.quantity == 0:
-        source_item.status = "In Use" if source_item.unit in ["Unit", "Set"] else "Depleted"
+    if source_item.quantity == 0: source_item.status = "Fully Utilized" if source_item.unit in ["Unit", "Set"] else "Out of Stock"
 
-    new_transfer = models.MaterialTransfer(
-        item_name=norm_name, brand=normalize_item_name(req.brand), quantity=req.quantity,
-        unit=req.unit, source_site_id=req.source_site_id, destination_site_id=req.destination_site_id,
-        linked_request_id=req.linked_request_id,
-        status=models.TransferStatus.IN_TRANSIT.value
-    )
+    new_transfer = models.MaterialTransfer(item_name=norm_name, brand=normalize_item_name(req.brand), quantity=req.quantity, unit=req.unit, source_site_id=req.source_site_id, destination_site_id=req.destination_site_id, linked_request_id=req.linked_request_id, status=models.TransferStatus.IN_TRANSIT.value)
     db.add(new_transfer)
 
-    # ERP Linkage: Update Request status if this transfer fulfills a request
     if req.linked_request_id:
         mat_req = db.query(models.MaterialRequest).filter(models.MaterialRequest.id == req.linked_request_id).first()
         if mat_req:
             mat_req.status = "Approved & Routing"
             mat_req.fulfillment_method = "Internal Transfer"
             mat_req.approved_by_id = current_user.id
-
-    db.add(models.ActivityLog(user_id=current_user.id, action=f"User [{current_user.username}]: Dispatched {req.quantity} {req.unit} of {norm_name} to Site ID {req.destination_site_id}."))
     db.commit()
     return {"status": "Success", "message": "Transfer initiated successfully."}
 
@@ -649,8 +510,8 @@ def receive_transfer(transfer_id: int, current_user: models.User = Depends(get_c
     transfer.status = models.TransferStatus.RECEIVED.value
     transfer.received_at = dt_datetime.utcnow()
     norm_name = normalize_item_name(transfer.item_name)
+    is_asset = transfer.unit in ["Unit", "Set"]
     
-    # ERP LOOP CLOSURE
     dest_item = None
     if transfer.linked_request_id:
         mat_req = db.query(models.MaterialRequest).filter(models.MaterialRequest.id == transfer.linked_request_id).first()
@@ -658,130 +519,72 @@ def receive_transfer(transfer_id: int, current_user: models.User = Depends(get_c
             mat_req.status = "Fulfilled"
             if mat_req.inventory_id: dest_item = db.query(models.Inventory).filter(models.Inventory.id == mat_req.inventory_id).first()
     
-    if not dest_item:
-        dest_item = db.query(models.Inventory).filter(models.Inventory.site_id == transfer.destination_site_id, models.Inventory.item_name == norm_name).first()
+    if not dest_item: dest_item = db.query(models.Inventory).filter(models.Inventory.site_id == transfer.destination_site_id, models.Inventory.item_name == norm_name).first()
 
     if dest_item:
         dest_item.quantity += transfer.quantity
         dest_item.baseline_quantity = dest_item.quantity
-        if transfer.unit in ["Unit", "Set"]:
-            dest_item.status = "Available" if dest_item.quantity > 0 else "In Use"
-        else:
-            dest_item.status = get_dynamic_status(dest_item.quantity, dest_item.baseline_quantity, dest_item.status)
+        dest_item.status = get_dynamic_status(dest_item.quantity, dest_item.baseline_quantity, dest_item.status, is_asset)
     else:
-        db.add(models.Inventory(
-            item_name=norm_name, brand=transfer.brand, quantity=transfer.quantity,
-            baseline_quantity=transfer.quantity, unit=transfer.unit, 
-            status="Available" if transfer.unit in ["Unit", "Set"] else "In Stock",
-            fsn_status="FAST", site_id=transfer.destination_site_id
-        ))
+        db.add(models.Inventory(item_name=norm_name, brand=transfer.brand, quantity=transfer.quantity, baseline_quantity=transfer.quantity, unit=transfer.unit, status="Available" if is_asset else "In Stock", fsn_status="FAST", site_id=transfer.destination_site_id))
 
-    db.add(models.ActivityLog(user_id=current_user.id, action=f"User [{current_user.username}]: Received Transfer #{transfer.id} closing loop."))
     db.commit()
     return {"status": "Success", "message": "Transfer received successfully. Inventory synced."}
 
 @app.post("/transfers/{transfer_id}/cancel", tags=["Transfers"])
 def cancel_transfer(transfer_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     transfer = db.query(models.MaterialTransfer).filter(models.MaterialTransfer.id == transfer_id).first()
-    if not transfer or transfer.status != models.TransferStatus.IN_TRANSIT.value: raise HTTPException(404, detail="Transfer not found.")
-
     transfer.status = "CANCELLED"
     source_item = db.query(models.Inventory).filter(models.Inventory.site_id == transfer.source_site_id, models.Inventory.item_name == transfer.item_name).first()
+    is_asset = source_item.unit in ["Unit", "Set"] if source_item else False
 
     if source_item:
         source_item.quantity += transfer.quantity
         source_item.baseline_quantity = source_item.quantity 
-        if source_item.unit in ["Unit", "Set"]:
-            source_item.status = "Available"
-        else:
-            if source_item.status in ["Critical", "Low Stock"]: source_item.status = "In Stock"
+        source_item.status = get_dynamic_status(source_item.quantity, source_item.baseline_quantity, source_item.status, is_asset)
 
-    db.add(models.ActivityLog(user_id=current_user.id, action=f"User [{current_user.username}]: Rejected Transfer TRK-{transfer.id:04d}."))
     db.commit()
-    return {"status": "Success", "message": "Transfer cancelled and stock reverted to origin."}
+    return {"status": "Success"}
 
-# --- SUPPLIERS & PROCUREMENT ---
+# --- PROCUREMENT & GLOBAL DISCOVERY ---
+@app.get("/procurement/discover", response_model=List[GlobalSourcingResult], tags=["Procurement"])
+def discover_materials(site_id: int, query: str = Query(..., min_length=2), db: Session = Depends(get_db)):
+    target_site = db.query(models.ProjectSite).filter(models.ProjectSite.id == site_id).first()
+    if not target_site: raise HTTPException(404, "Site not found")
+
+    norm_query = normalize_item_name(query)
+    matches = db.query(models.SupplierMaterial).filter(models.SupplierMaterial.material_name.ilike(f"%{norm_query}%")).all()
+    
+    results = []
+    for mat in matches:
+        if mat.quantity <= 0: continue 
+        supplier = db.query(models.Supplier).filter(models.Supplier.id == mat.supplier_id).first()
+        if not supplier: continue
+        dist = compute_distance(target_site.latitude, target_site.longitude, supplier.latitude, supplier.longitude)
+        results.append({ "supplier_id": supplier.id, "supplier_name": supplier.name, "contact": supplier.contact, "is_internal": getattr(supplier, 'is_sister_company', False), "distance_km": round(dist, 1), "material_name": mat.material_name, "brand": mat.brand or "Generic/No Brand", "available_qty": mat.quantity, "unit": mat.unit or "Pcs", "unit_price": mat.price, "delivery_rating": mat.delivery_rating or 5.0 })
+        
+    return sorted(results, key=lambda x: (x["unit_price"], x["distance_km"]))
+
+@app.get("/suppliers/recent", tags=["Procurement"])
+def get_recent_suppliers(db: Session = Depends(get_db)):
+    recent_pos = db.query(models.PurchaseOrder.supplier_id, func.count(models.PurchaseOrder.id).label('total')).group_by(models.PurchaseOrder.supplier_id).order_by(func.count(models.PurchaseOrder.id).desc()).limit(3).all()
+    sup_ids = [po.supplier_id for po in recent_pos]
+    if not sup_ids: return db.query(models.Supplier).filter(models.Supplier.is_sister_company == True).all()
+    return db.query(models.Supplier).filter(models.Supplier.id.in_(sup_ids)).all()
+
 @app.get("/suppliers/", response_model=List[SupplierOut], tags=["Logistics"])
-def list_suppliers(db: Session = Depends(get_db)):
-    return db.query(models.Supplier).all()
-
-@app.post("/suppliers/", response_model=SupplierOut, tags=["Logistics"])
-def create_supplier(s: schemas.SupplierCreate = Body(...), db: Session = Depends(get_db)):
-    new_s = models.Supplier(
-        name=s.name, contact=s.contact, latitude=s.lat, longitude=s.lon, 
-        quality_rating=s.rating, is_sister_company=False, address=s.address
-    )
-    db.add(new_s)
-    db.commit()
-    db.refresh(new_s)
-
-    if s.material:
-        clean_price = 0.0
-        if s.price:
-            try: clean_price = float(str(s.price).replace("₱", "").replace(",", "").strip())
-            except: pass 
-                
-        db.add(models.SupplierMaterial(supplier_id=new_s.id, material_name=normalize_item_name(s.material), price=clean_price, stock_level=s.stockLevel))
-        db.commit()
-        db.refresh(new_s) 
-
-    return new_s
-
-@app.patch("/suppliers/{supplier_id}/rating", tags=["Logistics"])
-def update_supplier_rating(supplier_id: int, req: schemas.RatingUpdate = Body(...), db: Session = Depends(get_db)):
-    supplier = db.query(models.Supplier).filter(models.Supplier.id == supplier_id).first()
-    if not supplier: raise HTTPException(status_code=404, detail="Supplier not found")
-    supplier.quality_rating = req.rating
-    db.commit()
-    return {"status": "success", "message": "Rating updated", "new_rating": supplier.quality_rating}
-
-@app.delete("/suppliers/{supplier_id}", tags=["Logistics"])
-def delete_supplier(supplier_id: int, db: Session = Depends(get_db)):
-    db_supplier = db.query(models.Supplier).filter(models.Supplier.id == supplier_id).first()
-    if not db_supplier: raise HTTPException(status_code=404, detail="Supplier not found")
-    db.delete(db_supplier)
-    db.commit()
-    return {"status": "success", "message": f"Supplier {supplier_id} deleted"}
-
-@app.get("/suppliers/{supplier_id}/catalog", response_model=List[CatalogItemOut], tags=["Suppliers"])
-def get_supplier_catalog(supplier_id: int, db: Session = Depends(get_db)):
-    supplier = db.query(models.Supplier).filter(models.Supplier.id == supplier_id).first()
-    if not supplier: raise HTTPException(status_code=404, detail="Supplier not found")
-    return db.query(models.SupplierMaterial).filter(models.SupplierMaterial.supplier_id == supplier_id).all()
-
+def list_suppliers(db: Session = Depends(get_db)): return db.query(models.Supplier).all()
 
 @app.post("/inventory/purchase-orders", tags=["Logistics"])
 def create_purchase_order(req: schemas.PurchaseOrderCreate = Body(...), current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if current_user.role not in ["admin", "owner"]:
-        raise HTTPException(403, detail="ERP SECURITY: Only Admins have procurement purchasing authority.")
-
-    norm_name = normalize_item_name(req.material_name)
-
-    # --- FIX: DEDUCT SUPPLIER STOCK ---
-    sup_mat = db.query(models.SupplierMaterial).filter(
-        models.SupplierMaterial.supplier_id == req.supplier_id, 
-        models.SupplierMaterial.material_name == norm_name
-    ).first()
-
+    if current_user.role not in ["admin", "owner"]: raise HTTPException(403, detail="Only Admins have purchasing authority.")
+    sup_mat = db.query(models.SupplierMaterial).filter(models.SupplierMaterial.supplier_id == req.supplier_id, models.SupplierMaterial.material_name == normalize_item_name(req.material_name)).first()
     if sup_mat:
-        if sup_mat.quantity < req.quantity:
-            raise HTTPException(400, detail=f"Cannot order. Supplier only has {sup_mat.quantity} {sup_mat.unit} left.")
-        
-        # Deduct the ordered amount
+        if sup_mat.quantity < req.quantity: raise HTTPException(400, detail=f"Cannot order. Supplier only has {sup_mat.quantity} left.")
         sup_mat.quantity -= req.quantity
-        
-        # Update their stock level tag dynamically
-        if sup_mat.quantity <= 0:
-            sup_mat.stock_level = "Out of Stock"
-        elif sup_mat.quantity <= 20:
-            sup_mat.stock_level = "Low"
-        else:
-            sup_mat.stock_level = "Available"
+        if sup_mat.quantity <= 0: sup_mat.stock_level = "Out of Stock"
 
-    new_order = models.PurchaseOrder(
-        supplier_id=req.supplier_id, site_id=req.site_id, material_name=norm_name,
-        quantity=req.quantity, total_price=req.total_price, linked_request_id=req.linked_request_id, status="Pending"
-    )
+    new_order = models.PurchaseOrder(supplier_id=req.supplier_id, site_id=req.site_id, material_name=normalize_item_name(req.material_name), quantity=req.quantity, total_price=req.total_price, linked_request_id=req.linked_request_id, status="Pending")
     db.add(new_order)
     
     if req.linked_request_id:
@@ -789,38 +592,18 @@ def create_purchase_order(req: schemas.PurchaseOrderCreate = Body(...), current_
         if mat_req:
             mat_req.status = "Approved & Routing"
             mat_req.fulfillment_method = "External Purchase"
-            mat_req.approved_by_id = current_user.id
-            
-    db.add(models.ActivityLog(user_id=current_user.id, action=f"User [{current_user.username}]: Issued PO to Supplier #{req.supplier_id} for {req.material_name}."))
     db.commit()
-    return {"status": "Success", "message": "Purchase order sent. Supplier catalog updated."}
+    return {"status": "Success"}
 
 @app.post("/inventory/purchase-orders/{po_id}/receive", tags=["Logistics"])
 def receive_po(po_id: int, rating: int = Body(0, embed=True), current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     po = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.id == po_id).first()
-    if not po: 
-        raise HTTPException(404, detail="Valid pending PO not found.")
-        
-    if po.status == "Pending":
-        raise HTTPException(400, detail="Cannot receive delivery. The supplier has not shipped this order yet.")
-    if po.status == "Received":
-        raise HTTPException(400, detail="This order has already been received.")
-        
     po.status = "Received"
     
-    # --- FIX: UPDATE SUPPLIER DELIVERY RATING ---
     if rating > 0:
-        sup_mat = db.query(models.SupplierMaterial).filter(
-            models.SupplierMaterial.supplier_id == po.supplier_id,
-            models.SupplierMaterial.material_name == po.material_name
-        ).first()
-        if sup_mat:
-            if sup_mat.delivery_rating == 0.0:
-                sup_mat.delivery_rating = float(rating)
-            else:
-                sup_mat.delivery_rating = (sup_mat.delivery_rating + float(rating)) / 2.0
+        sup_mat = db.query(models.SupplierMaterial).filter(models.SupplierMaterial.supplier_id == po.supplier_id, models.SupplierMaterial.material_name == po.material_name).first()
+        if sup_mat: sup_mat.delivery_rating = float(rating) if sup_mat.delivery_rating == 0.0 else (sup_mat.delivery_rating + float(rating)) / 2.0
     
-    # Close the ERP Request loop
     dest_item = None
     if po.linked_request_id:
         mat_req = db.query(models.MaterialRequest).filter(models.MaterialRequest.id == po.linked_request_id).first()
@@ -828,51 +611,41 @@ def receive_po(po_id: int, rating: int = Body(0, embed=True), current_user: mode
             mat_req.status = "Fulfilled"
             if mat_req.inventory_id: dest_item = db.query(models.Inventory).filter(models.Inventory.id == mat_req.inventory_id).first()
     
-    if not dest_item:
-        dest_item = db.query(models.Inventory).filter(models.Inventory.site_id == po.site_id, models.Inventory.item_name == po.material_name).first()
+    if not dest_item: dest_item = db.query(models.Inventory).filter(models.Inventory.site_id == po.site_id, models.Inventory.item_name == po.material_name).first()
     
     if dest_item:
         dest_item.quantity += po.quantity
         dest_item.baseline_quantity = dest_item.quantity
-        dest_item.status = "In Stock" if dest_item.status in ["Critical", "Low Stock", "Depleted"] else dest_item.status
+        dest_item.status = "In Stock" if dest_item.status in ["Critical", "Low Stock", "Out of Stock"] else dest_item.status
     else:
         db.add(models.Inventory(site_id=po.site_id, item_name=po.material_name, brand="Generic/No Brand", quantity=po.quantity, baseline_quantity=po.quantity, unit="Pcs", status="In Stock", fsn_status="FAST"))
         
-    db.add(models.ActivityLog(user_id=current_user.id, action=f"User [{current_user.username}]: Received PO #{po.id}. Rated {rating} stars."))
     db.commit()
-    return {"status": "Success", "message": "PO Received, Inventory Updated, and Supplier Rated."}
+    return {"status": "Success"}
+
+@app.post("/inventory/purchase-orders/{po_id}/cancel", tags=["Logistics"])
+def cancel_po(po_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    po = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.id == po_id).first()
+    po.status = "Cancelled"
+    db.commit()
+    return {"status": "Success"}
 
 @app.get("/inventory/purchase-orders", tags=["Logistics"])
 def list_purchase_orders(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if current_user.role in ["admin", "owner"]:
-        return db.query(models.PurchaseOrder).order_by(models.PurchaseOrder.id.desc()).all()
-    
+    if current_user.role in ["admin", "owner"]: return db.query(models.PurchaseOrder).order_by(models.PurchaseOrder.id.desc()).all()
     managed_sites = [s.id for s in db.query(models.ProjectSite).filter(models.ProjectSite.manager_id == current_user.id).all()]
     return db.query(models.PurchaseOrder).filter(models.PurchaseOrder.site_id.in_(managed_sites)).order_by(models.PurchaseOrder.id.desc()).all()
 
 
-# --- SELLER PORTAL ---
-class SellerMaterialCreate(BaseModel):
-    material_name: str
-    brand: str = "Generic/No Brand"
-    quantity: float = 0.0
-    unit: str = "Pcs"
-    price: float
-    stock_level: str
-
+# --- RESTORED: SELLER PORTAL ---
 def ensure_supplier_profile(user, db: Session):
     if not user.supplier_id:
         company = getattr(user, "company_name", None)
         store_name = company if company else f"{user.username} Store"
-        
-        new_sup = models.Supplier(
-            name=store_name, contact="Update in Settings", address="Update in Settings",
-            latitude=14.5995, longitude=120.9842, quality_rating=5, is_sister_company=False
-        )
+        new_sup = models.Supplier(name=store_name, contact="Update in Settings", address="Update in Settings", latitude=14.5995, longitude=120.9842, quality_rating=5, is_sister_company=False)
         db.add(new_sup)
         db.commit()
         db.refresh(new_sup)
-        
         user.supplier_id = new_sup.id
         db.commit()
     return user.supplier_id
@@ -888,10 +661,8 @@ def add_seller_material(mat: SellerMaterialCreate = Body(...), current_user: mod
     if current_user.role != "seller": raise HTTPException(status_code=403, detail="Unauthorized: Sellers only.")
     sup_id = ensure_supplier_profile(current_user, db)
     norm_name = normalize_item_name(mat.material_name)
-    
     existing = db.query(models.SupplierMaterial).filter(models.SupplierMaterial.supplier_id == sup_id, models.SupplierMaterial.material_name == norm_name).first()
     if existing: raise HTTPException(status_code=400, detail="Material already exists in your catalog.")
-
     db.add(models.SupplierMaterial(supplier_id=sup_id, material_name=norm_name, brand=mat.brand, quantity=mat.quantity, unit=mat.unit, price=mat.price, stock_level=mat.stock_level))
     db.commit()
     return {"status": "success", "message": f"Added {norm_name} to catalog."}
@@ -904,28 +675,26 @@ def update_seller_material(
     sup_id = ensure_supplier_profile(current_user, db)
     material = db.query(models.SupplierMaterial).filter(models.SupplierMaterial.id == material_id, models.SupplierMaterial.supplier_id == sup_id).first()
     if not material: raise HTTPException(status_code=404, detail="Material not found in your catalog.")
-    
     if price is not None: material.price = price
     if stock_level is not None: material.stock_level = stock_level
     if brand is not None: material.brand = brand
     if quantity is not None: material.quantity = quantity
     if unit is not None: material.unit = unit
-    
     db.commit()
-    return {"status": "success", "message": "Catalog updated"}
+    return {"status": "success", "message": "Material updated successfully"}
 
 @app.delete("/seller/materials/{material_id}", tags=["Seller Portal"])
 def delete_seller_material(material_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     sup_id = ensure_supplier_profile(current_user, db)
     material = db.query(models.SupplierMaterial).filter(models.SupplierMaterial.id == material_id, models.SupplierMaterial.supplier_id == sup_id).first()
-    if not material: raise HTTPException(status_code=404, detail="Material not found.")
-    
+    if not material: raise HTTPException(status_code=404, detail="Material not found in your catalog.")
     db.delete(material)
     db.commit()
-    return {"status": "success", "message": "Item removed from catalog"}
+    return {"status": "success"}
 
 @app.get("/seller/orders", tags=["Seller Portal"])
 def get_seller_orders(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if current_user.role != "seller": raise HTTPException(status_code=403, detail="Unauthorized.")
     sup_id = ensure_supplier_profile(current_user, db)
     return db.query(models.PurchaseOrder).filter(models.PurchaseOrder.supplier_id == sup_id).order_by(models.PurchaseOrder.id.desc()).all()
 
@@ -934,159 +703,61 @@ def update_order_status(order_id: int, status: str = Body(..., embed=True), curr
     sup_id = ensure_supplier_profile(current_user, db)
     order = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.id == order_id, models.PurchaseOrder.supplier_id == sup_id).first()
     if not order: raise HTTPException(status_code=404, detail="Order not found.")
-    
     order.status = status
     db.commit()
     return {"status": "success", "new_status": order.status}
 
 
-# --- ADVISORY ENGINE & RAG CHATBOT ---
+# --- ADVISORY ENGINE ---
 @app.get("/advisory/auto-restock/{site_id}", tags=["Advisory"])
 def get_smart_restock_options(site_id: int, item_name: str, quantity_needed: float, db: Session = Depends(get_db)):
     target_site = db.query(models.ProjectSite).filter(models.ProjectSite.id == site_id).first()
-    if not target_site: raise HTTPException(404, detail="Target site not found.")
-
     norm_name = normalize_item_name(item_name)
     options = []
 
-    # 1. Search for Internal Surplus FIRST
-    surplus_items = db.query(models.Inventory).filter(
-        models.Inventory.item_name == norm_name, models.Inventory.status == "Surplus", models.Inventory.site_id != site_id
-    ).all()
-
+    surplus_items = db.query(models.Inventory).filter(models.Inventory.item_name == norm_name, models.Inventory.status == "Surplus", models.Inventory.site_id != site_id).all()
     for item in surplus_items:
-        # FIX: Ensure the surplus site actually has enough to fulfill the requirement
-        if item.quantity < quantity_needed:
-            continue
-            
+        if item.quantity < quantity_needed: continue
         source_site = db.query(models.ProjectSite).filter(models.ProjectSite.id == item.site_id).first()
         dist = compute_distance(target_site.latitude, target_site.longitude, source_site.latitude, source_site.longitude)
         est_cost = calculate_transfer_cost(dist) 
-        
-        options.append({
-            "type": "INTERNAL_TRANSFER", "source_name": source_site.site_name, "source_id": source_site.id,
-            "distance_km": round(dist, 2), "estimated_total_cost": est_cost, "recommendation_reason": f"Surplus available. Logistics cost: ₱{est_cost:,.2f}"
-        })
+        options.append({ "type": "INTERNAL_TRANSFER", "source_name": source_site.site_name, "source_id": source_site.id, "distance_km": round(dist, 2), "estimated_total_cost": est_cost, "recommendation_reason": f"Surplus available. Logistics cost: ₱{est_cost:,.2f}" })
 
-    # 2. Search External Suppliers
-    external_materials = db.query(models.SupplierMaterial).filter(
-        models.SupplierMaterial.material_name == norm_name, models.SupplierMaterial.stock_level.in_(["Available", "High", "Medium"])
-    ).all()
-
+    external_materials = db.query(models.SupplierMaterial).filter(models.SupplierMaterial.material_name == norm_name, models.SupplierMaterial.quantity >= quantity_needed).all()
     for mat in external_materials:
         supplier = db.query(models.Supplier).filter(models.Supplier.id == mat.supplier_id).first()
         if not supplier: continue
         dist = compute_distance(target_site.latitude, target_site.longitude, supplier.latitude, supplier.longitude)
         est_cost = calculate_procurement_cost(mat.price, quantity_needed, dist)
-        
-        options.append({
-            "type": "EXTERNAL_PURCHASE", "source_name": supplier.name, "source_id": supplier.id,
-            "distance_km": round(dist, 2), "estimated_total_cost": est_cost,
-            # --- THE ERP FIX: EXPOSE SUPPLIER STOCK QUANTITY HERE ---
-            "recommendation_reason": f"Stock Available: {mat.quantity} {mat.unit} | Unit price ₱{mat.price:,.2f}. Total cost with delivery: ₱{est_cost:,.2f}"
-        })
+        options.append({ "type": "EXTERNAL_PURCHASE", "source_name": supplier.name, "source_id": supplier.id, "distance_km": round(dist, 2), "estimated_total_cost": est_cost, "recommendation_reason": f"Stock Available: {mat.quantity} {mat.unit} | Unit price ₱{mat.price:,.2f}. Total cost with delivery: ₱{est_cost:,.2f}" })
 
     return sorted(options, key=lambda x: x["estimated_total_cost"])
 
-@app.get("/advisory/procure/{site_id}/{item_name}", tags=["Advisory"])
-def procure_advice(site_id: int, item_name: str, db: Session = Depends(get_db)):
-    site = db.query(models.ProjectSite).filter(models.ProjectSite.id == site_id).first()
-    if not site: raise HTTPException(status_code=404, detail="Site not found")
-        
-    norm_name = normalize_item_name(item_name)
-    suppliers = db.query(models.Supplier).all()
-    recommendations = []
-    
-    for s in suppliers:
-        dist = compute_distance(site.latitude, site.longitude, s.latitude, s.longitude)
-        travel_time = get_real_travel_time(site.latitude, site.longitude, s.latitude, s.longitude)
-        specific_material = db.query(models.SupplierMaterial).filter(models.SupplierMaterial.supplier_id == s.id, models.SupplierMaterial.material_name == norm_name).first()
-
-        actual_rating = specific_material.delivery_rating if (specific_material and hasattr(specific_material, 'delivery_rating') and specific_material.delivery_rating > 0) else s.quality_rating
-        predicted_score = (actual_rating * 10) - (dist * 1.5)
-        
-        if getattr(s, 'is_sister_company', False): predicted_score += 15
-        if specific_material: predicted_score += 5
-
-        recommendations.append({
-            "supplier": s.name, "distance_km": round(dist, 2), "travel_time_mins": travel_time,
-            "score": round(max(5, min(99, predicted_score)), 2), "contact": s.contact, 
-            "is_sister": getattr(s, 'is_sister_company', False), "specific_match": bool(specific_material)
-        })
-            
-    return sorted(recommendations, key=lambda x: x['score'], reverse=True)
-
-class ChatRequest(BaseModel):
-    message: str
-    context: Optional[dict] = None
-
 @app.post("/advisory/chat", tags=["Advisory"])
-def chat_with_ai(req: ChatRequest = Body(...), current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+def chat_with_ai(req: dict = Body(...), current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        return {"reply": "⚠️ **System Error:** GEMINI_API_KEY is not set."}
-    
     genai.configure(api_key=api_key)
-    suppliers = db.query(models.Supplier).all()
-    supplier_materials = db.query(models.SupplierMaterial).all()
     
-    if current_user.role in ["admin", "owner"]:
-        surplus_data = db.query(models.Inventory).filter(models.Inventory.status == "Surplus").all()
-    else:
-        managed_site = getattr(current_user, "managed_site_id", None)
-        if managed_site:
-            surplus_data = db.query(models.Inventory).filter(models.Inventory.status == "Surplus", models.Inventory.site_id == managed_site).all()
-        else:
-            surplus_data = db.query(models.Inventory).filter(models.Inventory.status == "Surplus").all()
-
-    supplier_context = "VERIFIED PENTABUILD SUPPLIERS:\n"
-    for s in suppliers:
-        supplier_context += f"- {s.name} | General Rating: {s.quality_rating}/5\n"
-
-    mat_context = "\nKNOWN SUPPLIER CATALOGS:\n"
-    for sm in supplier_materials:
-        sup = next((s for s in suppliers if s.id == sm.supplier_id), None)
-        sup_name = sup.name if sup else "Unknown"
-        mat_context += f"- {sup_name} sells {sm.material_name} at ₱{sm.price}\n"
-
+    surplus_data = db.query(models.Inventory).filter(models.Inventory.status == "Surplus").all()
     internal_context = "\nINTERNAL PROJECT SURPLUS (Available for Transfer):\n"
-    if not surplus_data:
-        internal_context += "- No internal surplus reported.\n"
-    else:
-        for item in surplus_data:
-            site = db.query(models.ProjectSite).filter(models.ProjectSite.id == item.site_id).first()
-            site_name = site.site_name if site else "Unknown Site"
-            internal_context += f"- {item.item_name} ({item.brand}) | Qty: {item.quantity} {item.unit} | Location: {site_name} (Site ID: {item.site_id})\n"
+    for item in surplus_data:
+        site = db.query(models.ProjectSite).filter(models.ProjectSite.id == item.site_id).first()
+        internal_context += f"- {item.item_name} ({item.brand}) | Qty: {item.quantity} {item.unit} | Location: {site.site_name if site else 'Unknown'} (Site ID: {item.site_id})\n"
 
-    system_instruction = f"""You are MatTrack AI, an intelligent, bilingual enterprise logistics advisor for Pentabuild Construction.
-
-    [LANGUAGE CAPABILITIES]:
-    - You MUST fluidly understand and respond in Tagalog, English, or Taglish (Filipino construction terminology).
-    - Map Filipino construction terms automatically (e.g., 'buhangin' -> Sand, 'pako' -> Nails, 'semento' -> Portland Cement).
-
+    system_instruction = f"""You are MatTrack PRO, a Heuristic Procurement Advisor for Pentabuild Construction.
     [LIVE RAG DATABASE CONTEXT]:
     {internal_context}
-    {supplier_context}
-    {mat_context}
-
     [DECISION LOGIC & RULES]:
     1. ALWAYS prioritize INTERNAL PROJECT SURPLUS before external purchasing.
-    2. CRITICAL ACTION TAG: If you recommend an internal transfer, you MUST append this exact command tag at the very end of your reply: [TRANSFER:site_id:item_name:brand:quantity:unit].
-    3. If internal surplus is insufficient, recommend the highest-rated or cheapest verified external external supplier.
-    4. If the user asks for prevailing hardware market prices not found in the local catalog, estimate standard Philippine construction retail prices.
+    2. CRITICAL ACTION TAG: If you recommend an internal transfer, append exactly: [TRANSFER:site_id:item_name:brand:quantity:unit].
     """
-
     try:
         available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        selected_model = next((m for m in available_models if 'flash' in m), available_models[0])
-            
-        model = genai.GenerativeModel(model_name=selected_model)
-        full_prompt = f"{system_instruction}\n\n--- USER REQUEST ---\n{req.message}"
-        response = model.generate_content(full_prompt)
+        model = genai.GenerativeModel(model_name=next((m for m in available_models if 'flash' in m), available_models[0]))
+        response = model.generate_content(f"{system_instruction}\n\n--- USER REQUEST ---\n{req['message']}")
         return {"reply": response.text}
     except Exception as e:
-        return {"reply": f"⚠️ **AI Error:** {str(e)}"}
+        return {"reply": f"⚠️ **System Error:** {str(e)}"}
     
 @app.get("/")
-def health_check():
-    return {"status": "online", "system": "MatTrack PRO ERP Core", "version": "2.4.0"}
+def health_check(): return {"status": "online", "system": "MatTrack PRO ERP Core", "version": "2.5.0"}

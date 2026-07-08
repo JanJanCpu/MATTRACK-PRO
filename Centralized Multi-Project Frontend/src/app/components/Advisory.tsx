@@ -62,7 +62,7 @@ export function Advisory() {
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
     const savedChat = localStorage.getItem(storageKey);
     if (savedChat) { try { return JSON.parse(savedChat); } catch (e) {} }
-    return [{ id: "welcome", role: "ai", content: "System Online. I am your MatTrack PRO Logistics & Procurement Advisor. I accept English, Tagalog, or Taglish terminology (e.g., 'buhangin', 'kabilya'). Click an FAQ below or type a query to check surplus ledgers, external supplier ratings, or real-time hardware market baselines." }];
+    return [{ id: "welcome", role: "ai", content: "System Online. I am your MatTrack PRO Procurement Advisor. I accept English, Tagalog, or Taglish terminology (e.g., 'buhangin', 'kabilya'). Click an FAQ below or type a query to check surplus ledgers, external supplier ratings, or real-time hardware market baselines." }];
   });
 
   const [inputMessage, setInputMessage] = useState("");
@@ -80,7 +80,6 @@ export function Advisory() {
         const siteNames = sites.map((s) => s.site_name);
         setUserSites(siteNames);
 
-        // Fetch user data again purely to guarantee timing execution in this block
         let mySiteId = 1;
         const token = localStorage.getItem("token");
         let role = "staff";
@@ -102,8 +101,7 @@ export function Advisory() {
         const siteMap = new Map(sites.map((s) => [s.id, s.site_name]));
         let urgent = inventory.filter((item) => item.status === "Critical" || item.status === "Low Stock");
 
-        // --- ERP FIX: PM SCOPE ISOLATION ---
-        // If the user is a PM, strip out all the emergencies from other sites!
+        // PM SCOPE ISOLATION
         if (role === "staff") {
            urgent = urgent.filter(item => item.site_id === mySiteId);
         }
@@ -125,13 +123,13 @@ export function Advisory() {
     setIsTyping(true);
 
     try {
-      const historyTranscript = messages.slice(-6).map((m) => `${m.role === "ai" ? "AI Advisor" : "Manager"}: ${m.content}`).join("\n\n");
+      const historyTranscript = messages.slice(-6).map((m) => `${m.role === "ai" ? "Advisor" : "Manager"}: ${m.content}`).join("\n\n");
       const siteContext = userSites.length > 0 ? `[SYSTEM ALERT: The user sending this message manages the following project site(s): ${userSites.join(", ")}. If they ask to procure a material but don't mention a specific site, ASSUME it is for their assigned site.]\n\n` : "";
       const contextPayload = `${siteContext}--- RECENT CONVERSATION HISTORY ---\n${historyTranscript}\n\n--- CURRENT MESSAGE ---\nManager: ${textToSend}`;
       const response = await advisoryAPI.askAI(contextPayload);
       setMessages((prev) => [...prev, { id: (Date.now() + 1).toString(), role: "ai", content: response.reply || "I encountered an error analyzing that request. Please try again." }]);
     } catch (error) {
-      setMessages((prev) => [...prev, { id: (Date.now() + 1).toString(), role: "ai", content: "System Error: Unable to reach the AI API. Please verify your backend connection." }]);
+      setMessages((prev) => [...prev, { id: (Date.now() + 1).toString(), role: "ai", content: "System Error: Unable to reach the API. Please verify your backend connection." }]);
     } finally { setIsTyping(false); }
   };
 
@@ -164,7 +162,7 @@ export function Advisory() {
           brand: brand.trim() || "Generic/No Brand", quantity: Number(qty), unit: unit.trim(),
         });
         setMessages((prev) => [...prev, { id: Date.now().toString(), role: "ai", content: `✅ Transfer initiated! Logistics network alerted to move ${qty} ${unit} of ${itemName} from Site ${sourceId}. It is now awaiting receipt at your destination.` }]);
-      } catch (error: any) { alert(error.message || "Failed to execute AI transfer command. Check backend logs."); } finally { setIsTyping(false); }
+      } catch (error: any) { alert(error.message || "Failed to execute transfer command. Check backend logs."); } finally { setIsTyping(false); }
     } else {
       const isConfirmed = window.confirm(`REQUEST VERIFICATION:\n\nProject Managers cannot directly dispatch materials. Do you want to submit an official material request to the Admin for ${qty} ${unit} of ${itemName}?`);
       if (!isConfirmed) {
@@ -183,8 +181,8 @@ export function Advisory() {
   };
 
   const handleClearChat = () => {
-    if (window.confirm("Are you sure you want to clear the AI context and session history?")) {
-      const resetMessage: ChatMessage[] = [{ id: "reset", role: "ai", content: "Session cleared. Neural context reset. I accept Taglish queries and real-time market sourcing. How can I assist?" }];
+    if (window.confirm("Are you sure you want to clear the context and session history?")) {
+      const resetMessage: ChatMessage[] = [{ id: "reset", role: "ai", content: "Session cleared. Heuristic context reset. I accept Taglish queries and real-time market sourcing. How can I assist?" }];
       setMessages(resetMessage);
       localStorage.setItem(storageKey, JSON.stringify(resetMessage));
     }
@@ -195,10 +193,10 @@ export function Advisory() {
       <div>
         <h1 className="text-2xl font-bold text-neutral-900 flex items-center gap-2">
           <Sparkles className="w-6 h-6 text-emerald-500" />
-          AI Advisory Engine
+          Procurement Advisor
         </h1>
         <p className="text-sm text-neutral-500 mt-1">
-          Bilingual enterprise chatbot powered by live inventory data, supplier tracking, and market grounding.
+          Enterprise heuristic engine powered by real-time inventory telemetry, supplier tracking, and market baselines.
         </p>
       </div>
 
@@ -215,7 +213,11 @@ export function Advisory() {
             ) : criticalItems.length === 0 ? (
               <div className="flex flex-col items-center justify-center text-center h-full space-y-2 opacity-70">
                 <CheckCircle className="w-8 h-8 text-emerald-500" />
-                <p className="text-sm font-medium text-emerald-800">Your assigned site is optimal & in stock.</p>
+                <p className="text-sm font-medium text-emerald-800">
+                  {["admin", "owner"].includes(currentUserRole) 
+                    ? "All network sites are optimal & in stock." 
+                    : "Your assigned site is optimal & in stock."}
+                </p>
               </div>
             ) : (
               <div className="space-y-3">
@@ -226,7 +228,7 @@ export function Advisory() {
                       <span className={`text-[10px] font-bold px-2 py-1 uppercase tracking-wider rounded border ${item.status === "Critical" ? "bg-red-50 border-red-200 text-red-700" : "bg-amber-50 border-amber-200 text-amber-700"}`}>{item.status}</span>
                     </div>
                     <button onClick={() => handleAskAboutItem(item)} className="w-full mt-3 py-2 bg-slate-50 text-slate-700 text-xs font-bold rounded-lg hover:bg-emerald-50 hover:text-emerald-700 border border-slate-200 hover:border-emerald-300 transition-all flex items-center justify-center gap-2 shadow-sm">
-                      <Sparkles className="w-3.5 h-3.5" /> Source with AI
+                      <Sparkles className="w-3.5 h-3.5" /> Run Sourcing Heuristic
                     </button>
                   </div>
                 ))}
@@ -238,8 +240,8 @@ export function Advisory() {
         <div className="lg:col-span-2 flex flex-col bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden relative">
           <div className="px-5 py-3 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
             <div className="flex items-center gap-4 text-xs font-bold text-slate-600">
-              <span className="flex items-center gap-1.5 text-emerald-600 bg-emerald-50 px-2 py-1 rounded border border-emerald-100"><Database className="w-3.5 h-3.5" /> Live Data Sync: Active</span>
-              <span className="flex items-center gap-1.5 text-indigo-600 bg-indigo-50 px-2 py-1 rounded border border-indigo-100"><ShieldCheck className="w-3.5 h-3.5" /> Taglish NLP: Enabled</span>
+              <span className="flex items-center gap-1.5 text-emerald-600 bg-emerald-50 px-2 py-1 rounded border border-emerald-100"><Database className="w-3.5 h-3.5" /> Real-Time Telemetry: Active</span>
+              <span className="flex items-center gap-1.5 text-indigo-600 bg-indigo-50 px-2 py-1 rounded border border-indigo-100"><ShieldCheck className="w-3.5 h-3.5" /> Heuristic Engine: Online</span>
             </div>
             <button onClick={handleClearChat} className="flex items-center gap-1.5 text-slate-400 hover:text-red-500 transition-colors text-xs font-bold px-2 py-1 rounded hover:bg-red-50"><Trash2 className="w-3.5 h-3.5" /> Clear Session</button>
           </div>
