@@ -4,14 +4,13 @@ import {
   TileLayer,
   Marker,
   Popup,
-  Polyline,
   Tooltip,
 } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
 import { Search, MapPin } from "lucide-react";
-import { sitesAPI, suppliersAPI } from "../../services/apiService";
-import type { ProjectSite, Supplier } from "../../types";
+import { sitesAPI, suppliersAPI, inventoryAPI } from "../../services/apiService";
+import type { ProjectSite, Supplier, Inventory as InventoryItem } from "../../types";
 
 // --- Leaflet Icon Fixes (Using Reliable unpkg CDN) ---
 delete (L.Icon.Default.prototype as any)._getIconUrl;
@@ -59,31 +58,35 @@ export function LogisticsMap() {
   const [showSuppliers, setShowSuppliers] = useState(true);
   const [showCrowdsourced, setShowCrowdsourced] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
-  
-  // --- NEW: Routing State ---
-  const [transferRoute, setTransferRoute] = useState<[number, number][]>([]);
 
   const fetchData = async () => {
     try {
       setLoading(true);
-      const [sitesList, suppliersList] = await Promise.all([
+      // Fetch Sites, Suppliers, AND Live Inventory to determine pin colors dynamically
+      const [sitesList, suppliersList, inventoryList] = await Promise.all([
         sitesAPI.list(),
         suppliersAPI.list(),
+        inventoryAPI.list() 
       ]);
 
       const mapLocations: MapLocation[] = [
-        ...sitesList.map((site, idx) => {
+        ...sitesList.map((site) => {
           let type: MapLocation["type"] = "project";
-          let details = `Project Site ${idx + 1} - Active`;
+          let details = `Standard Operations`;
           
           let address = (site as any).address || "Address not provided";
 
-          if (site.site_name.includes("Makati")) {
-            type = "surplus";
-            details = "Cement (50 extra bags ready for transfer)";
-          } else if (site.site_name.includes("Paco")) {
+          // DYNAMIC ALGORITHM: Check this specific site's inventory ledger
+          const siteInventory = inventoryList.filter(item => item.site_id === site.id);
+          const criticalItems = siteInventory.filter(item => item.status === "Critical" || item.status === "Low Stock" || item.quantity === 0);
+          const surplusItems = siteInventory.filter(item => item.status === "Surplus");
+
+          if (criticalItems.length > 0) {
             type = "shortage";
-            details = "Cement (Critical Needs: 30 bags)";
+            details = `CRITICAL NEEDS: ${criticalItems.map(i => i.item_name).join(", ")}`;
+          } else if (surplusItems.length > 0) {
+            type = "surplus";
+            details = `SURPLUS AVAILABLE: ${surplusItems.map(i => i.item_name).join(", ")}`;
           }
 
           return {
@@ -106,7 +109,7 @@ export function LogisticsMap() {
             address,
             lat: supplier.latitude,
             lng: supplier.longitude,
-            details: `Quality Rating: ${supplier.quality_rating.toFixed(1)} - ${supplier.contact}`,
+            details: `Quality Rating: ${supplier.quality_rating.toFixed(1)}/5 Stars - Contact: ${supplier.contact}`,
           };
         }),
       ];
@@ -142,33 +145,6 @@ export function LogisticsMap() {
 
     return true;
   });
-
-  // --- NEW: OSRM Routing Logic ---
-  const surplusLoc = visibleLocations.find(l => l.type === "surplus");
-  const shortageLoc = visibleLocations.find(l => l.type === "shortage");
-
-  useEffect(() => {
-    if (surplusLoc && shortageLoc) {
-      const fetchRoadRoute = async () => {
-        try {
-          const url = `https://router.project-osrm.org/route/v1/driving/${surplusLoc.lng},${surplusLoc.lat};${shortageLoc.lng},${shortageLoc.lat}?overview=full&geometries=geojson`;
-          const response = await fetch(url);
-          const data = await response.json();
-          
-          if (data.routes && data.routes.length > 0) {
-            const coords = data.routes[0].geometry.coordinates.map((c: number[]) => [c[1], c[0]]);
-            setTransferRoute(coords);
-          }
-        } catch (error) {
-          console.error("OSRM Routing failed, falling back to straight line.", error);
-          setTransferRoute([[surplusLoc.lat, surplusLoc.lng], [shortageLoc.lat, shortageLoc.lng]]);
-        }
-      };
-      fetchRoadRoute();
-    } else {
-      setTransferRoute([]); 
-    }
-  }, [surplusLoc?.id, shortageLoc?.id]);
 
   return (
     <div className="h-full flex flex-col space-y-4 animate-in fade-in duration-500">
@@ -224,29 +200,24 @@ export function LogisticsMap() {
                 <span className="text-sm text-neutral-700 font-bold">Crowdsourced Stores <span className="text-neutral-400 font-normal">({totalCrowdsource})</span></span>
               </div>
             </div>
-            <p className="text-[10px] text-neutral-400 mt-2 px-2">Click items above to filter map visibility.</p>
           </div>
 
           <div className="pt-4 border-t border-neutral-200">
-            <h3 className="text-xs font-bold text-neutral-500 uppercase tracking-wider mb-3">Active Logistics</h3>
+            <h3 className="text-xs font-bold text-neutral-500 uppercase tracking-wider mb-3">Live Status Legend</h3>
             <div className="space-y-2">
               <div className="flex items-center gap-2 p-2 opacity-80">
                 <img src="https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-violet.png" className="w-3 h-5" alt="violet" />
-                <span className="text-sm text-neutral-700 font-medium">Surplus Material</span>
+                <span className="text-sm text-neutral-700 font-medium">Surplus Material Present</span>
               </div>
               <div className="flex items-center gap-2 p-2 opacity-80">
                 <img src="https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png" className="w-3 h-5" alt="red" />
-                <span className="text-sm text-neutral-700 font-medium">Critical Shortage</span>
-              </div>
-              <div className="flex items-center gap-2 p-2 opacity-80">
-                <div className="w-6 h-1 border-t-2 border-dashed border-indigo-600"></div>
-                <span className="text-sm text-neutral-700 font-medium">Suggested Transfer (Road Network)</span>
+                <span className="text-sm text-neutral-700 font-medium">Critical Shortage Detected</span>
               </div>
             </div>
+            <p className="text-[10px] text-neutral-400 mt-2 leading-tight">Map pins dynamically update colors based on the live inventory status of each project site.</p>
           </div>
         </div>
 
-        {/* MAP CONTAINER FIX: Added explicit min-height to force map to render */}
         <div className="lg:col-span-3 bg-neutral-100 border border-neutral-200 rounded-xl overflow-hidden relative shadow-inner z-0 min-h-[500px]">
           {!loading && (
             <MapContainer center={[14.57, 121.01]} zoom={13} className="w-full h-full absolute inset-0">
@@ -273,13 +244,6 @@ export function LogisticsMap() {
                   </Popup>
                 </Marker>
               ))}
-
-              {showProjects && transferRoute.length > 0 && (
-                <Polyline
-                  positions={transferRoute}
-                  pathOptions={{ color: '#4F46E5', dashArray: '10, 10', weight: 4, opacity: 0.9 }}
-                />
-              )}
             </MapContainer>
           )}
         </div>

@@ -89,11 +89,17 @@ def calculate_procurement_cost(unit_price: float, quantity: float, distance_km: 
     delivery_fee = distance_km * SUPPLIER_DELIVERY_RATE
     return round(material_cost + delivery_fee, 2)
 
-# --- TERMINOLOGY UPDATE: "Depleted" -> "Fully Utilized" OR "Out of Stock" ---
+# --- AUTO-STATUS INTELLIGENCE FIX ---
 def get_dynamic_status(quantity: float, baseline: float, current_status: str, is_asset: bool = False) -> str:
-    if current_status in ["Sufficient", "Surplus"]: return current_status
-    if quantity <= 0: return "Fully Utilized" if is_asset else "Out of Stock"
+    # Respect explicit lifecycle flags
+    if current_status in ["Sufficient", "Surplus", "Fully Utilized"]: return current_status
+    
+    # Auto-trigger Critical alarms if it hits 0 (unless it's a tool/asset)
+    if quantity <= 0: return "Fully Utilized" if is_asset else "Critical"
+    
+    # Low stock triggers at 10%
     if quantity <= (baseline * 0.10): return "Low Stock"
+    
     return "Available" if is_asset else "In Stock"
 
 class CatalogItemOut(BaseModel):
@@ -306,19 +312,29 @@ def log_stock_transaction(transaction: schemas.InventoryBase = Body(...), curren
     action_text = ""
     if item:
         item.quantity += transaction.quantity
-        if transaction.quantity > 0:
-            item.baseline_quantity = item.quantity 
+        
+        # --- NEW AUTO-STATUS INTELLIGENCE ---
+        # If stock hits 0 and they haven't explicitly locked it to "Fully Utilized", it triggers Critical
+        if item.quantity <= 0 and item.status != "Fully Utilized":
+            item.status = "Critical"
+        # If stock recovers above 0, clear the critical/depleted warnings
+        elif item.quantity > 0 and item.status in ["Critical", "Out of Stock", "Depleted"]:
             item.status = "Available" if is_asset else "In Stock"
-            action_text = f"Restocked {norm_item_name} ({norm_brand}). New total baseline is {item.quantity} {transaction.unit}."
         else:
-            action_text = f"Logged usage of {abs(transaction.quantity)} {transaction.unit} for {norm_item_name}."
-        item.status = get_dynamic_status(item.quantity, item.baseline_quantity, item.status, is_asset)
+            # Fallback to the intelligent dynamic calculator
+            item.status = get_dynamic_status(item.quantity, item.baseline_quantity, item.status, is_asset)
+            
+        action_text = f"Logged usage/restock of {abs(transaction.quantity)} {transaction.unit} for {norm_item_name}."
     else:
+        # --- FIX FOR 500 CRASH: Safely strip frontend-only keys before saving to DB ---
         inv_data = transaction.dict(exclude={"supplier_id", "batch_rating"})
+        inv_data.pop("is_locked_status", None) # Prevents the SQLAlchemy TypeError!
+        
         inv_data['item_name'] = norm_item_name
         inv_data['brand'] = norm_brand
         inv_data['baseline_quantity'] = transaction.quantity
         inv_data['status'] = get_dynamic_status(transaction.quantity, transaction.quantity, clean_status, is_asset)
+        
         item = models.Inventory(**inv_data)
         db.add(item)
         action_text = f"Registered initial baseline for {transaction.quantity} {transaction.unit} of item: {norm_item_name}."
@@ -371,7 +387,10 @@ def bulk_upload_inventory(items: List[schemas.InventoryBase] = Body(...), curren
             existing_item.baseline_quantity = existing_item.quantity
             existing_item.status = get_dynamic_status(existing_item.quantity, existing_item.baseline_quantity, existing_item.status, is_asset)
         else:
+            # Add strict removal of is_locked_status for bulk ingestion
             inv_data = item_data.dict(exclude={"supplier_id", "batch_rating"})
+            inv_data.pop("is_locked_status", None)
+            
             inv_data['item_name'] = norm_name
             inv_data['brand'] = norm_brand
             inv_data['status'] = clean_status
@@ -401,8 +420,7 @@ def delete_inventory_item(item_id: int, current_user: models.User = Depends(get_
     db.commit()
     return {"status": "success", "message": f"Item {item_id} deleted"}
 
-
-# --- RESTORED: NOTIFICATIONS ---
+# --- NOTIFICATIONS ---
 @app.get("/notifications", tags=["Notifications"])
 def get_user_notifications(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     notifs = db.query(models.Notification).filter(models.Notification.user_id == current_user.id).order_by(models.Notification.id.desc()).limit(10).all()
@@ -481,14 +499,12 @@ def initiate_transfer(req: schemas.TransferCreate = Body(...), current_user: mod
     if current_user.role not in ["admin", "owner"]: raise HTTPException(403, detail="ERP SECURITY: Only Admins can execute logistics transfers.")
     norm_name = normalize_item_name(req.item_name)
     
-    # ERP FIX: AI Transfer Fallback (Ignore strict brand match if exact match fails)
     source_item = db.query(models.Inventory).filter(
         models.Inventory.site_id == req.source_site_id, 
         models.Inventory.item_name == norm_name, 
         models.Inventory.brand == normalize_item_name(req.brand)
     ).first()
 
-    # If the AI suggested a site but the brands don't perfectly match (e.g. asked for Generic, surplus is Republic)
     if not source_item:
         source_item = db.query(models.Inventory).filter(
             models.Inventory.site_id == req.source_site_id, 
@@ -501,9 +517,8 @@ def initiate_transfer(req: schemas.TransferCreate = Body(...), current_user: mod
     source_item.quantity -= req.quantity
     if source_item.quantity <= 0: 
         source_item.quantity = 0.0
-        source_item.status = "Fully Utilized" if source_item.unit in ["Unit", "Set"] else "Out of Stock"
+        source_item.status = "Fully Utilized" if source_item.unit in ["Unit", "Set"] else "Critical"
 
-    # Use the actual source_item.brand to ensure data consistency in transit
     new_transfer = models.MaterialTransfer(item_name=norm_name, brand=source_item.brand, quantity=req.quantity, unit=req.unit, source_site_id=req.source_site_id, destination_site_id=req.destination_site_id, linked_request_id=req.linked_request_id, status=models.TransferStatus.IN_TRANSIT.value)
     db.add(new_transfer)
 
@@ -631,13 +646,11 @@ def delete_supplier(supplier_id: int, db: Session = Depends(get_db)):
     db.commit()
     return {"status": "success", "message": f"Supplier {supplier_id} deleted"}
 
-# ---> RESTORED: SUPPLIER CATALOG ROUTE <---
 @app.get("/suppliers/{supplier_id}/catalog", response_model=List[CatalogItemOut], tags=["Suppliers"])
 def get_supplier_catalog_by_id(supplier_id: int, db: Session = Depends(get_db)):
     supplier = db.query(models.Supplier).filter(models.Supplier.id == supplier_id).first()
     if not supplier: raise HTTPException(status_code=404, detail="Supplier not found")
     return db.query(models.SupplierMaterial).filter(models.SupplierMaterial.supplier_id == supplier_id).all()
-
 
 @app.post("/inventory/purchase-orders", tags=["Logistics"])
 def create_purchase_order(req: schemas.PurchaseOrderCreate = Body(...), current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -694,7 +707,6 @@ def cancel_po(po_id: int, current_user: models.User = Depends(get_current_user),
     
     po.status = "Cancelled"
     
-    # --- NEW ERP FIX: Refund the stock back to the supplier's catalog ---
     sup_mat = db.query(models.SupplierMaterial).filter(
         models.SupplierMaterial.supplier_id == po.supplier_id, 
         models.SupplierMaterial.material_name == po.material_name
@@ -715,7 +727,7 @@ def list_purchase_orders(current_user: models.User = Depends(get_current_user), 
     return db.query(models.PurchaseOrder).filter(models.PurchaseOrder.site_id.in_(managed_sites)).order_by(models.PurchaseOrder.id.desc()).all()
 
 
-# --- RESTORED: SELLER PORTAL ---
+# --- SELLER PORTAL ---
 def ensure_supplier_profile(user, db: Session):
     if not user.supplier_id:
         company = getattr(user, "company_name", None)

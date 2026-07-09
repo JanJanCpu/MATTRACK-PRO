@@ -121,13 +121,13 @@ export function Inventory() {
 
   let processedData = inventoryData; if (siteFilter) processedData = processedData.filter((i) => i.site_id === siteFilter); if (statusFilter !== "All") processedData = processedData.filter((i) => i.status === statusFilter);
 
-  const getStatusWeight = (status: string) => { switch (status) { case "Critical": case "Maintenance": case "Out of Stock": case "Fully Utilized": return 1; case "Low Stock": return 2; case "In Stock": case "Sufficient": case "Available": return 3; case "In Use": return 4; case "Surplus": return 5; default: return 99; } };
+  const getStatusWeight = (status: string) => { switch (status) { case "Critical": case "Maintenance": case "Out of Stock": case "Fully Utilized": case "Depleted": return 1; case "Low Stock": return 2; case "In Stock": case "Sufficient": case "Available": return 3; case "In Use": return 4; case "Surplus": return 5; default: return 99; } };
   const sortedData = [...processedData].sort((a, b) => getStatusWeight(a.status) - getStatusWeight(b.status));
 
   const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => { if (e.target.checked) { const editableIds = sortedData.filter((item: InventoryWithCategory) => { const site = sitesList.find((s: ProjectSite) => s.id === item.site_id); return currentUserRole !== "staff" || (site && site.manager_id === currentUserId); }).map((item: InventoryWithCategory) => item.id); setSelectedIds(editableIds); } else { setSelectedIds([]); } };
   const handleSelectItem = (id: number) => { setSelectedIds((prev) => prev.includes(id) ? prev.filter((itemId) => itemId !== id) : [...prev, id]); };
 
-  const getStatusColor = (status: string) => { switch (status) { case "Critical": case "Maintenance": return "bg-red-100 text-red-700 border-red-200"; case "Low Stock": return "bg-amber-100 text-amber-700 border-amber-200"; case "In Stock": case "Available": case "Sufficient": return "bg-emerald-100 text-emerald-700 border-emerald-200"; case "Surplus": return "bg-blue-100 text-blue-700 border-blue-200"; case "In Use": return "bg-indigo-100 text-indigo-700 border-indigo-200"; case "Out of Stock": case "Fully Utilized": return "bg-neutral-100 text-neutral-500 border-neutral-300"; default: return "bg-neutral-100 text-neutral-700 border-neutral-200"; } };
+  const getStatusColor = (status: string) => { switch (status) { case "Critical": case "Maintenance": return "bg-red-100 text-red-700 border-red-200"; case "Low Stock": return "bg-amber-100 text-amber-700 border-amber-200"; case "In Stock": case "Available": case "Sufficient": return "bg-emerald-100 text-emerald-700 border-emerald-200"; case "Surplus": return "bg-blue-100 text-blue-700 border-blue-200"; case "In Use": return "bg-indigo-100 text-indigo-700 border-indigo-200"; case "Out of Stock": case "Fully Utilized": case "Depleted": return "bg-neutral-100 text-neutral-500 border-neutral-300"; default: return "bg-neutral-100 text-neutral-700 border-neutral-200"; } };
 
   const editableSites = sitesList.filter((s) => currentUserRole !== "staff" || s.manager_id === currentUserId);
 
@@ -217,7 +217,7 @@ export function Inventory() {
                       const isCriticalOrLow = item.status === "Critical" || item.status === "Low Stock";
                       const isAsset = item.unit === "Unit" || item.unit === "Set";
                       const progressPercent = item.baseline_quantity > 0 ? Math.min(100, Math.max(0, (item.quantity / item.baseline_quantity) * 100)) : 0;
-                      const isDepleted = item.status === 'Fully Utilized' || item.status === 'Out of Stock';
+                      const isDepleted = item.status === 'Fully Utilized' || item.status === 'Out of Stock' || item.status === 'Depleted';
 
                       return (
                         <tr key={item.id} className={`hover:bg-neutral-50/50 transition-colors ${selectedIds.includes(item.id) ? "bg-red-50/30" : ""} ${!canEdit && isDeleteMode ? "opacity-50 bg-neutral-50" : ""}`}>
@@ -240,12 +240,18 @@ export function Inventory() {
                                 <>
                                   <button onClick={() => { setActiveTransactionItem(item); setModalType("IN"); }} className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors" title={isAsset ? "Mark as Available" : "Restock Delivery Intake"}><ArrowDownToLine className="w-4 h-4" /></button>
                                   <button onClick={() => { setActiveTransactionItem(item); setModalType("OUT"); }} className="p-2 text-slate-700 hover:bg-slate-100 rounded-lg transition-colors" title={isAsset ? "Mark as In Use" : "Log Field Consumption"}><ArrowUpFromLine className="w-4 h-4" /></button>
-                                  {currentUserRole === "staff" && (
-                                    <>
-                                      {isCriticalOrLow && !isAsset && !isDeleteMode && (<button onClick={() => { setRequestItem(item); setRequestQty(Math.max(1, item.baseline_quantity - item.quantity)); setShowRequestModal(true); }} className="p-2 ml-1 text-amber-600 hover:bg-amber-50 rounded-lg transition-colors flex items-center gap-1 text-xs font-bold border border-amber-200 shadow-sm" title="Send Replenishment Request to Admin"><ShoppingCart className="w-4 h-4" /> Restock</button>)}
-                                      {!isAsset && (<button onClick={() => { setActiveTransactionItem(item); setModalType("LIFECYCLE"); }} className="p-2 ml-1 text-indigo-600 hover:bg-indigo-50 border border-transparent hover:border-indigo-200 rounded-lg transition-colors" title="Manage Status Lifecycle"><Flag className="w-4 h-4" /></button>)}
-                                    </>
+                                  
+                                  {/* PM ONLY: Restock Request Button */}
+                                  {currentUserRole === "staff" && isCriticalOrLow && !isAsset && !isDeleteMode && (
+                                    <button onClick={() => { setRequestItem(item); setRequestQty(Math.max(1, item.baseline_quantity - item.quantity)); setShowRequestModal(true); }} className="p-2 ml-1 text-amber-600 hover:bg-amber-50 rounded-lg transition-colors flex items-center gap-1 text-xs font-bold border border-amber-200 shadow-sm" title="Send Replenishment Request to Admin"><ShoppingCart className="w-4 h-4" /> Restock</button>
                                   )}
+
+                                  {/* EVERYONE (Admin & PM): Lifecycle Flag Button */}
+                                  {!isAsset && !isDeleteMode && (
+                                    <button onClick={() => { setActiveTransactionItem(item); setModalType("LIFECYCLE"); }} className="p-2 ml-1 text-indigo-600 hover:bg-indigo-50 border border-transparent hover:border-indigo-200 rounded-lg transition-colors" title="Manage Status Lifecycle"><Flag className="w-4 h-4" /></button>
+                                  )}
+                                  
+                                  {/* ADMIN ONLY: AI Advisor & Network Transfer */}
                                   {currentUserRole !== "staff" && !isDeleteMode && (
                                     <>
                                       <button onClick={() => handleSmartRestock(item)} className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors flex items-center gap-1 text-xs font-bold" title="Logistics Advisor"><Sparkles className="w-4 h-4" /></button>
