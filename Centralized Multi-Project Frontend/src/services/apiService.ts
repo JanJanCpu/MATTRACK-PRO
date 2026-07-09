@@ -88,10 +88,30 @@ export const transferAPI = {
 
 // --- 4. SUPPLIER APIs ---
 export const suppliersAPI = {
-  create: (data: any) => fetchAPI<Supplier>(`${BASE_URL}/suppliers/`, { method: "POST", body: JSON.stringify({ ...data, rating: Number(data.rating) }) }),
+  create: (data: any) =>
+    fetchAPI<Supplier>(`${BASE_URL}/suppliers/`, {
+      method: "POST",
+      body: JSON.stringify({
+        ...data,
+        rating: Number(data.rating),
+      }),
+    }),
+
   list: () => fetchAPI<Supplier[]>(`${BASE_URL}/suppliers/`),
-  updateRating: (id: number, rating: number) => fetchAPI<any>(`${BASE_URL}/suppliers/${id}/rating`, { method: "PATCH", body: JSON.stringify({ rating: Number(rating) }) }),
-  delete: (id: number) => fetchAPI<any>(`${BASE_URL}/suppliers/${id}`, { method: "DELETE" }),
+  
+  // ---> NEW: Fetches recently transacted hardware stores
+  getRecent: () => fetchAPI<Supplier[]>(`${BASE_URL}/suppliers/recent`),
+
+  updateRating: (id: number, rating: number) =>
+    fetchAPI<any>(`${BASE_URL}/suppliers/${id}/rating`, {
+      method: "PATCH",
+      body: JSON.stringify({ rating: Number(rating) }),
+    }),
+
+  delete: (id: number) =>
+    fetchAPI<any>(`${BASE_URL}/suppliers/${id}`, {
+      method: "DELETE",
+    }),
 };
 
 // --- 5. ADVISORY APIs ---

@@ -31,6 +31,7 @@ export interface Supplier {
   longitude: number;
   quality_rating: number;
   categories?: string;
+  address?: string;             
 }
 
 // --- ERP UPGRADED MODEL ---

@@ -469,6 +469,7 @@ def list_material_requests(current_user: models.User = Depends(get_current_user)
 def update_request_status(req_id: int, req_data: schemas.RequestStatusUpdate = Body(...), current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     if current_user.role not in ["admin", "owner"]: raise HTTPException(status_code=403, detail="Only Admins can update request statuses.")
     mat_req = db.query(models.MaterialRequest).filter(models.MaterialRequest.id == req_id).first()
+    if not mat_req: raise HTTPException(status_code=404, detail="Request not found.")
     mat_req.status = req_data.status
     db.commit()
     db.refresh(mat_req)
@@ -479,14 +480,31 @@ def update_request_status(req_id: int, req_data: schemas.RequestStatusUpdate = B
 def initiate_transfer(req: schemas.TransferCreate = Body(...), current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     if current_user.role not in ["admin", "owner"]: raise HTTPException(403, detail="ERP SECURITY: Only Admins can execute logistics transfers.")
     norm_name = normalize_item_name(req.item_name)
-    source_item = db.query(models.Inventory).filter(models.Inventory.site_id == req.source_site_id, models.Inventory.item_name == norm_name, models.Inventory.brand == normalize_item_name(req.brand)).first()
+    
+    # ERP FIX: AI Transfer Fallback (Ignore strict brand match if exact match fails)
+    source_item = db.query(models.Inventory).filter(
+        models.Inventory.site_id == req.source_site_id, 
+        models.Inventory.item_name == norm_name, 
+        models.Inventory.brand == normalize_item_name(req.brand)
+    ).first()
+
+    # If the AI suggested a site but the brands don't perfectly match (e.g. asked for Generic, surplus is Republic)
+    if not source_item:
+        source_item = db.query(models.Inventory).filter(
+            models.Inventory.site_id == req.source_site_id, 
+            models.Inventory.item_name == norm_name,
+            models.Inventory.quantity >= req.quantity
+        ).first()
 
     if not source_item or source_item.quantity < req.quantity: raise HTTPException(400, detail="Insufficient stock at source site.")
 
     source_item.quantity -= req.quantity
-    if source_item.quantity == 0: source_item.status = "Fully Utilized" if source_item.unit in ["Unit", "Set"] else "Out of Stock"
+    if source_item.quantity <= 0: 
+        source_item.quantity = 0.0
+        source_item.status = "Fully Utilized" if source_item.unit in ["Unit", "Set"] else "Out of Stock"
 
-    new_transfer = models.MaterialTransfer(item_name=norm_name, brand=normalize_item_name(req.brand), quantity=req.quantity, unit=req.unit, source_site_id=req.source_site_id, destination_site_id=req.destination_site_id, linked_request_id=req.linked_request_id, status=models.TransferStatus.IN_TRANSIT.value)
+    # Use the actual source_item.brand to ensure data consistency in transit
+    new_transfer = models.MaterialTransfer(item_name=norm_name, brand=source_item.brand, quantity=req.quantity, unit=req.unit, source_site_id=req.source_site_id, destination_site_id=req.destination_site_id, linked_request_id=req.linked_request_id, status=models.TransferStatus.IN_TRANSIT.value)
     db.add(new_transfer)
 
     if req.linked_request_id:
@@ -575,6 +593,52 @@ def get_recent_suppliers(db: Session = Depends(get_db)):
 @app.get("/suppliers/", response_model=List[SupplierOut], tags=["Logistics"])
 def list_suppliers(db: Session = Depends(get_db)): return db.query(models.Supplier).all()
 
+@app.post("/suppliers/", response_model=SupplierOut, tags=["Logistics"])
+def create_supplier(s: schemas.SupplierCreate = Body(...), db: Session = Depends(get_db)):
+    new_s = models.Supplier(
+        name=s.name, contact=s.contact, latitude=s.lat, longitude=s.lon, 
+        quality_rating=s.rating, is_sister_company=False, address=s.address
+    )
+    db.add(new_s)
+    db.commit()
+    db.refresh(new_s)
+
+    if s.material:
+        clean_price = 0.0
+        if s.price:
+            try: clean_price = float(str(s.price).replace("₱", "").replace(",", "").strip())
+            except: pass 
+                
+        db.add(models.SupplierMaterial(supplier_id=new_s.id, material_name=normalize_item_name(s.material), price=clean_price, stock_level=s.stockLevel))
+        db.commit()
+        db.refresh(new_s) 
+
+    return new_s
+
+@app.patch("/suppliers/{supplier_id}/rating", tags=["Logistics"])
+def update_supplier_rating(supplier_id: int, req: schemas.RatingUpdate = Body(...), db: Session = Depends(get_db)):
+    supplier = db.query(models.Supplier).filter(models.Supplier.id == supplier_id).first()
+    if not supplier: raise HTTPException(status_code=404, detail="Supplier not found")
+    supplier.quality_rating = req.rating
+    db.commit()
+    return {"status": "success", "message": "Rating updated", "new_rating": supplier.quality_rating}
+
+@app.delete("/suppliers/{supplier_id}", tags=["Logistics"])
+def delete_supplier(supplier_id: int, db: Session = Depends(get_db)):
+    db_supplier = db.query(models.Supplier).filter(models.Supplier.id == supplier_id).first()
+    if not db_supplier: raise HTTPException(status_code=404, detail="Supplier not found")
+    db.delete(db_supplier)
+    db.commit()
+    return {"status": "success", "message": f"Supplier {supplier_id} deleted"}
+
+# ---> RESTORED: SUPPLIER CATALOG ROUTE <---
+@app.get("/suppliers/{supplier_id}/catalog", response_model=List[CatalogItemOut], tags=["Suppliers"])
+def get_supplier_catalog_by_id(supplier_id: int, db: Session = Depends(get_db)):
+    supplier = db.query(models.Supplier).filter(models.Supplier.id == supplier_id).first()
+    if not supplier: raise HTTPException(status_code=404, detail="Supplier not found")
+    return db.query(models.SupplierMaterial).filter(models.SupplierMaterial.supplier_id == supplier_id).all()
+
+
 @app.post("/inventory/purchase-orders", tags=["Logistics"])
 def create_purchase_order(req: schemas.PurchaseOrderCreate = Body(...), current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     if current_user.role not in ["admin", "owner"]: raise HTTPException(403, detail="Only Admins have purchasing authority.")
@@ -626,9 +690,23 @@ def receive_po(po_id: int, rating: int = Body(0, embed=True), current_user: mode
 @app.post("/inventory/purchase-orders/{po_id}/cancel", tags=["Logistics"])
 def cancel_po(po_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     po = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.id == po_id).first()
+    if not po: raise HTTPException(status_code=404, detail="Order not found.")
+    
     po.status = "Cancelled"
+    
+    # --- NEW ERP FIX: Refund the stock back to the supplier's catalog ---
+    sup_mat = db.query(models.SupplierMaterial).filter(
+        models.SupplierMaterial.supplier_id == po.supplier_id, 
+        models.SupplierMaterial.material_name == po.material_name
+    ).first()
+    
+    if sup_mat:
+        sup_mat.quantity += po.quantity
+        if sup_mat.stock_level == "Out of Stock" and sup_mat.quantity > 0:
+            sup_mat.stock_level = "Available"
+            
     db.commit()
-    return {"status": "Success"}
+    return {"status": "success", "new_status": po.status}
 
 @app.get("/inventory/purchase-orders", tags=["Logistics"])
 def list_purchase_orders(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
