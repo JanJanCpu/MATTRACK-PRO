@@ -91,16 +91,24 @@ def calculate_procurement_cost(unit_price: float, quantity: float, distance_km: 
 
 # --- AUTO-STATUS INTELLIGENCE FIX ---
 def get_dynamic_status(quantity: float, baseline: float, current_status: str, is_asset: bool = False) -> str:
-    # Respect explicit lifecycle flags
-    if current_status in ["Sufficient", "Surplus", "Fully Utilized"]: return current_status
+    # 1. Respect explicit manual lifecycle flags (User knows best)
+    if current_status in ["Sufficient", "Surplus", "Fully Utilized", "Out of Stock"]: 
+        return current_status
     
-    # Auto-trigger Critical alarms if it hits 0 (unless it's a tool/asset)
-    if quantity <= 0: return "Fully Utilized" if is_asset else "Critical"
+    # 2. Tools/Assets behave differently (they don't get "consumed")
+    if is_asset:
+        return "In Use" if quantity <= 0 else "Available"
+        
+    # 3. STRICT RULE: If consumables hit 0, it is ALWAYS an emergency (Critical)
+    if quantity <= 0: 
+        return "Critical"
     
-    # Low stock triggers at 10%
-    if quantity <= (baseline * 0.10): return "Low Stock"
+    # 4. Low stock triggers at 10%
+    if quantity <= (baseline * 0.10): 
+        return "Low Stock"
     
-    return "Available" if is_asset else "In Stock"
+    # 5. Default healthy state
+    return "In Stock"
 
 class CatalogItemOut(BaseModel):
     id: int
@@ -313,22 +321,18 @@ def log_stock_transaction(transaction: schemas.InventoryBase = Body(...), curren
     if item:
         item.quantity += transaction.quantity
         
-        # --- NEW AUTO-STATUS INTELLIGENCE ---
-        # If stock hits 0 and they haven't explicitly locked it to "Fully Utilized", it triggers Critical
+        # --- REVERTED AUTO-STATUS INTELLIGENCE ---
         if item.quantity <= 0 and item.status != "Fully Utilized":
             item.status = "Critical"
-        # If stock recovers above 0, clear the critical/depleted warnings
         elif item.quantity > 0 and item.status in ["Critical", "Out of Stock", "Depleted"]:
             item.status = "Available" if is_asset else "In Stock"
         else:
-            # Fallback to the intelligent dynamic calculator
             item.status = get_dynamic_status(item.quantity, item.baseline_quantity, item.status, is_asset)
             
         action_text = f"Logged usage/restock of {abs(transaction.quantity)} {transaction.unit} for {norm_item_name}."
     else:
-        # --- FIX FOR 500 CRASH: Safely strip frontend-only keys before saving to DB ---
         inv_data = transaction.dict(exclude={"supplier_id", "batch_rating"})
-        inv_data.pop("is_locked_status", None) # Prevents the SQLAlchemy TypeError!
+        inv_data.pop("is_locked_status", None) 
         
         inv_data['item_name'] = norm_item_name
         inv_data['brand'] = norm_brand
@@ -387,7 +391,6 @@ def bulk_upload_inventory(items: List[schemas.InventoryBase] = Body(...), curren
             existing_item.baseline_quantity = existing_item.quantity
             existing_item.status = get_dynamic_status(existing_item.quantity, existing_item.baseline_quantity, existing_item.status, is_asset)
         else:
-            # Add strict removal of is_locked_status for bulk ingestion
             inv_data = item_data.dict(exclude={"supplier_id", "batch_rating"})
             inv_data.pop("is_locked_status", None)
             
@@ -459,6 +462,12 @@ def delete_material_request(req_id: int, current_user: models.User = Depends(get
     if current_user.role not in ["admin", "owner"]: raise HTTPException(status_code=403, detail="Only Admins can delete requests.")
     req = db.query(models.MaterialRequest).filter(models.MaterialRequest.id == req_id).first()
     if not req: raise HTTPException(status_code=404, detail="Request not found.")
+    
+    # --- FIX FOR 500 CORS CRASH ON DELETE ---
+    # Sever ties with any ghost transfers or POs before deleting to avoid Foreign Key Integrity Errors
+    db.query(models.MaterialTransfer).filter(models.MaterialTransfer.linked_request_id == req_id).update({"linked_request_id": None})
+    db.query(models.PurchaseOrder).filter(models.PurchaseOrder.linked_request_id == req_id).update({"linked_request_id": None})
+
     db.delete(req)
     db.commit()
     return {"status": "Success", "message": "Request permanently deleted."}
@@ -567,7 +576,12 @@ def receive_transfer(transfer_id: int, current_user: models.User = Depends(get_c
 @app.post("/transfers/{transfer_id}/cancel", tags=["Transfers"])
 def cancel_transfer(transfer_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     transfer = db.query(models.MaterialTransfer).filter(models.MaterialTransfer.id == transfer_id).first()
+    if not transfer:
+        raise HTTPException(status_code=404, detail="Transfer not found.")
+        
     transfer.status = "CANCELLED"
+    
+    # 1. Refund the inventory to the Source Site
     source_item = db.query(models.Inventory).filter(models.Inventory.site_id == transfer.source_site_id, models.Inventory.item_name == transfer.item_name).first()
     is_asset = source_item.unit in ["Unit", "Set"] if source_item else False
 
@@ -576,8 +590,29 @@ def cancel_transfer(transfer_id: int, current_user: models.User = Depends(get_cu
         source_item.baseline_quantity = source_item.quantity 
         source_item.status = get_dynamic_status(source_item.quantity, source_item.baseline_quantity, source_item.status, is_asset)
 
+    # 2. THE FIX: Rewind the linked Material Request
+    if transfer.linked_request_id:
+        mat_req = db.query(models.MaterialRequest).filter(models.MaterialRequest.id == transfer.linked_request_id).first()
+        if mat_req:
+            mat_req.status = "Pending Approval"
+            mat_req.fulfillment_method = None
+            mat_req.approved_by_id = None
+            
+            db.add(models.Notification(
+                user_id=mat_req.requested_by_id, 
+                title="Delivery Rejected", 
+                message=f"The transfer of {transfer.quantity} {transfer.unit} of {transfer.item_name} to Site {mat_req.site_id} was cancelled or rejected. It has been returned to your queue.", 
+                link="/requests"
+            ))
+
+    db.add(models.ActivityLog(
+        user_id=current_user.id, 
+        action=f"User [{current_user.username}]: REJECTED/CANCELLED Transfer #{transfer.id} for {transfer.item_name}. Stock refunded to source.",
+        is_security_event=True
+    ))
+
     db.commit()
-    return {"status": "Success"}
+    return {"status": "Success", "message": "Transfer cancelled. Stock refunded and Request reverted."}
 
 # --- PROCUREMENT & GLOBAL DISCOVERY ---
 @app.get("/procurement/discover", response_model=List[GlobalSourcingResult], tags=["Procurement"])
@@ -707,6 +742,7 @@ def cancel_po(po_id: int, current_user: models.User = Depends(get_current_user),
     
     po.status = "Cancelled"
     
+    # 1. Refund the stock back to the supplier's catalog
     sup_mat = db.query(models.SupplierMaterial).filter(
         models.SupplierMaterial.supplier_id == po.supplier_id, 
         models.SupplierMaterial.material_name == po.material_name
@@ -717,6 +753,27 @@ def cancel_po(po_id: int, current_user: models.User = Depends(get_current_user),
         if sup_mat.stock_level == "Out of Stock" and sup_mat.quantity > 0:
             sup_mat.stock_level = "Available"
             
+    # 2. THE FIX: Rewind the linked Material Request
+    if po.linked_request_id:
+        mat_req = db.query(models.MaterialRequest).filter(models.MaterialRequest.id == po.linked_request_id).first()
+        if mat_req:
+            mat_req.status = "Pending Approval"
+            mat_req.fulfillment_method = None
+            mat_req.approved_by_id = None
+            
+            db.add(models.Notification(
+                user_id=mat_req.requested_by_id, 
+                title="Purchase Order Cancelled", 
+                message=f"The external purchase order for {po.quantity} {po.material_name} was cancelled. It has been returned to your queue.", 
+                link="/requests"
+            ))
+
+    db.add(models.ActivityLog(
+        user_id=current_user.id, 
+        action=f"User [{current_user.username}]: CANCELLED Purchase Order #{po.id} for {po.material_name}. Request reverted.",
+        is_security_event=True
+    ))
+
     db.commit()
     return {"status": "success", "new_status": po.status}
 
@@ -793,7 +850,44 @@ def update_order_status(order_id: int, status: str = Body(..., embed=True), curr
     sup_id = ensure_supplier_profile(current_user, db)
     order = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.id == order_id, models.PurchaseOrder.supplier_id == sup_id).first()
     if not order: raise HTTPException(status_code=404, detail="Order not found.")
+    
+    old_status = order.status
     order.status = status
+    
+    # --- THE FIX: Rewind Request & Refund Stock if Seller Rejects/Cancels ---
+    if status in ["Rejected", "Cancelled"] and old_status not in ["Rejected", "Cancelled"]:
+        # 1. Refund the stock to the seller's catalog
+        sup_mat = db.query(models.SupplierMaterial).filter(
+            models.SupplierMaterial.supplier_id == sup_id, 
+            models.SupplierMaterial.material_name == order.material_name
+        ).first()
+        
+        if sup_mat:
+            sup_mat.quantity += order.quantity
+            if sup_mat.stock_level == "Out of Stock" and sup_mat.quantity > 0:
+                sup_mat.stock_level = "Available"
+                
+        # 2. Rewind the linked Material Request
+        if order.linked_request_id:
+            mat_req = db.query(models.MaterialRequest).filter(models.MaterialRequest.id == order.linked_request_id).first()
+            if mat_req:
+                mat_req.status = "Pending Approval"
+                mat_req.fulfillment_method = None
+                mat_req.approved_by_id = None
+                
+                db.add(models.Notification(
+                    user_id=mat_req.requested_by_id, 
+                    title="Supplier Rejected Order", 
+                    message=f"The supplier rejected the order for {order.quantity} {order.material_name}. The request has been returned to your queue.", 
+                    link="/requests"
+                ))
+                
+        db.add(models.ActivityLog(
+            user_id=current_user.id, 
+            action=f"Supplier [{current_user.username}]: REJECTED/CANCELLED Order #{order.id} for {order.material_name}.",
+            is_security_event=True
+        ))
+
     db.commit()
     return {"status": "success", "new_status": order.status}
 
@@ -811,7 +905,17 @@ def get_smart_restock_options(site_id: int, item_name: str, quantity_needed: flo
         source_site = db.query(models.ProjectSite).filter(models.ProjectSite.id == item.site_id).first()
         dist = compute_distance(target_site.latitude, target_site.longitude, source_site.latitude, source_site.longitude)
         est_cost = calculate_transfer_cost(dist) 
-        options.append({ "type": "INTERNAL_TRANSFER", "source_name": source_site.site_name, "source_id": source_site.id, "distance_km": round(dist, 2), "estimated_total_cost": est_cost, "recommendation_reason": f"Surplus available. Logistics cost: ₱{est_cost:,.2f}" })
+        options.append({ 
+            "type": "INTERNAL_TRANSFER", 
+            "source_name": source_site.site_name, 
+            "source_id": source_site.id, 
+            "distance_km": round(dist, 2), 
+            "estimated_total_cost": est_cost,
+            "available_stock": item.quantity,
+            "unit_price": 0.0,
+            "unit": item.unit,
+            "recommendation_reason": f"Surplus available. Logistics cost: ₱{est_cost:,.2f}" 
+        })
 
     external_materials = db.query(models.SupplierMaterial).filter(models.SupplierMaterial.material_name == norm_name, models.SupplierMaterial.quantity >= quantity_needed).all()
     for mat in external_materials:
@@ -819,7 +923,17 @@ def get_smart_restock_options(site_id: int, item_name: str, quantity_needed: flo
         if not supplier: continue
         dist = compute_distance(target_site.latitude, target_site.longitude, supplier.latitude, supplier.longitude)
         est_cost = calculate_procurement_cost(mat.price, quantity_needed, dist)
-        options.append({ "type": "EXTERNAL_PURCHASE", "source_name": supplier.name, "source_id": supplier.id, "distance_km": round(dist, 2), "estimated_total_cost": est_cost, "recommendation_reason": f"Stock Available: {mat.quantity} {mat.unit} | Unit price ₱{mat.price:,.2f}. Total cost with delivery: ₱{est_cost:,.2f}" })
+        options.append({ 
+            "type": "EXTERNAL_PURCHASE", 
+            "source_name": supplier.name, 
+            "source_id": supplier.id, 
+            "distance_km": round(dist, 2), 
+            "estimated_total_cost": est_cost,
+            "available_stock": mat.quantity,
+            "unit_price": mat.price,
+            "unit": mat.unit,
+            "recommendation_reason": f"Stock Available: {mat.quantity} {mat.unit} | Unit price ₱{mat.price:,.2f}. Total cost with delivery: ₱{est_cost:,.2f}" 
+        })
 
     return sorted(options, key=lambda x: x["estimated_total_cost"])
 

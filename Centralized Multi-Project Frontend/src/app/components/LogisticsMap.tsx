@@ -12,18 +12,18 @@ import { Search, MapPin } from "lucide-react";
 import { sitesAPI, suppliersAPI, inventoryAPI } from "../../services/apiService";
 import type { ProjectSite, Supplier, Inventory as InventoryItem } from "../../types";
 
-// --- Leaflet Icon Fixes (Using Reliable unpkg CDN) ---
+// --- THE FIX: Swapped to highly reliable Cloudflare & jsDelivr CDNs ---
 delete (L.Icon.Default.prototype as any)._getIconUrl;
 L.Icon.Default.mergeOptions({
-  iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
-  iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
-  shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
+  iconRetinaUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png",
+  iconUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png",
+  shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
 });
 
 const createIcon = (color: string) =>
   new L.Icon({
-    iconUrl: `https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-${color}.png`,
-    shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
+    iconUrl: `https://cdn.jsdelivr.net/gh/pointhi/leaflet-color-markers@master/img/marker-icon-2x-${color}.png`,
+    shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
     iconSize: [25, 41],
     iconAnchor: [12, 41],
     popupAnchor: [1, -34],
@@ -180,7 +180,8 @@ export function LogisticsMap() {
                 onClick={() => setShowProjects(!showProjects)}
                 className={`flex items-center gap-3 p-2 rounded-lg cursor-pointer transition-all ${showProjects ? 'bg-blue-50/50 hover:bg-blue-50' : 'opacity-40 grayscale hover:bg-neutral-50'}`}
               >
-                <img src="https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-blue.png" className="w-3 h-5" alt="blue" />
+                {/* THE FIX: Replaced raw github with jsdelivr in the Sidebar icons */}
+                <img src="https://cdn.jsdelivr.net/gh/pointhi/leaflet-color-markers@master/img/marker-icon-blue.png" className="w-3 h-5" alt="blue" />
                 <span className="text-sm text-neutral-700 font-bold">Project Sites <span className="text-neutral-400 font-normal">({totalProjects})</span></span>
               </div>
               
@@ -188,7 +189,7 @@ export function LogisticsMap() {
                 onClick={() => setShowSuppliers(!showSuppliers)}
                 className={`flex items-center gap-3 p-2 rounded-lg cursor-pointer transition-all ${showSuppliers ? 'bg-green-50/50 hover:bg-green-50' : 'opacity-40 grayscale hover:bg-neutral-50'}`}
               >
-                <img src="https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-green.png" className="w-3 h-5" alt="green" />
+                <img src="https://cdn.jsdelivr.net/gh/pointhi/leaflet-color-markers@master/img/marker-icon-green.png" className="w-3 h-5" alt="green" />
                 <span className="text-sm text-neutral-700 font-bold">Official Suppliers <span className="text-neutral-400 font-normal">({totalSuppliers})</span></span>
               </div>
 
@@ -196,7 +197,7 @@ export function LogisticsMap() {
                 onClick={() => setShowCrowdsourced(!showCrowdsourced)}
                 className={`flex items-center gap-3 p-2 rounded-lg cursor-pointer transition-all ${showCrowdsourced ? 'bg-orange-50/50 hover:bg-orange-50' : 'opacity-40 grayscale hover:bg-neutral-50'}`}
               >
-                <img src="https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-orange.png" className="w-3 h-5" alt="orange" />
+                <img src="https://cdn.jsdelivr.net/gh/pointhi/leaflet-color-markers@master/img/marker-icon-orange.png" className="w-3 h-5" alt="orange" />
                 <span className="text-sm text-neutral-700 font-bold">Crowdsourced Stores <span className="text-neutral-400 font-normal">({totalCrowdsource})</span></span>
               </div>
             </div>
@@ -206,11 +207,11 @@ export function LogisticsMap() {
             <h3 className="text-xs font-bold text-neutral-500 uppercase tracking-wider mb-3">Live Status Legend</h3>
             <div className="space-y-2">
               <div className="flex items-center gap-2 p-2 opacity-80">
-                <img src="https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-violet.png" className="w-3 h-5" alt="violet" />
+                <img src="https://cdn.jsdelivr.net/gh/pointhi/leaflet-color-markers@master/img/marker-icon-violet.png" className="w-3 h-5" alt="violet" />
                 <span className="text-sm text-neutral-700 font-medium">Surplus Material Present</span>
               </div>
               <div className="flex items-center gap-2 p-2 opacity-80">
-                <img src="https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png" className="w-3 h-5" alt="red" />
+                <img src="https://cdn.jsdelivr.net/gh/pointhi/leaflet-color-markers@master/img/marker-icon-red.png" className="w-3 h-5" alt="red" />
                 <span className="text-sm text-neutral-700 font-medium">Critical Shortage Detected</span>
               </div>
             </div>

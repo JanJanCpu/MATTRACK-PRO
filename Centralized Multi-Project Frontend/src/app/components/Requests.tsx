@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { createPortal } from "react-dom";
 import {
   ClipboardList, Plus, Clock, CheckCircle, XCircle, Truck, Building2,
-  Sparkles, Loader, PackageOpen, Navigation, X, AlertTriangle, Send, Lock, Trash2
+  Sparkles, Loader, PackageOpen, Navigation, X, AlertTriangle, Send, Lock, Trash2, Info
 } from "lucide-react";
 import { requestsAPI, sitesAPI, purchaseOrdersAPI, transferAPI, procurementAPI } from "../../services/apiService";
 import type { MaterialRequest, ProjectSite } from "../../types";
@@ -402,6 +402,7 @@ export function Requests() {
                 </div>
               )}
 
+              {/* --- UI DECOUPLING OF SUPPLIER STOCK DATA --- */}
               {!isAdvisorLoading && hasScanned && advisorOptions.length > 0 && (
                 <div className="space-y-4">
                   {advisorOptions.map((opt, index) => (
@@ -413,11 +414,24 @@ export function Requests() {
                             <span className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase tracking-wider ${opt.type === "EXTERNAL_PURCHASE" ? "bg-blue-100 text-blue-700" : "bg-purple-100 text-purple-700"}`}>{opt.type.replace("_", " ")}</span>
                           </div>
                           <h3 className="text-lg font-bold text-neutral-900">{opt.source_name}</h3>
-                          <p className="text-sm text-neutral-600 mt-1 font-medium">{opt.recommendation_reason}</p>
+                          
+                          {/* DECOUPLED UI METRICS */}
+                          <div className="flex items-center gap-3 mt-2">
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold text-slate-700 bg-slate-200/50 px-2 py-1 rounded">
+                              <PackageOpen className="w-3 h-3 text-slate-500"/> 
+                              Stock Available: {opt.available_stock} {opt.unit}
+                            </span>
+                            {opt.unit_price > 0 && (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2 py-1 rounded">
+                                Unit Price: ₱{opt.unit_price.toFixed(2)}
+                              </span>
+                            )}
+                          </div>
+                          
                         </div>
                         <div className="text-left sm:text-right">
                           <p className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider">Total Est. Cost</p>
-                          <p className={`text-2xl font-black ${index === 0 ? "text-emerald-700" : "text-neutral-900"}`}>₱{opt.estimated_total_cost.toFixed(2)}</p>
+                          <p className={`text-2xl font-black ${index === 0 ? "text-emerald-700" : "text-neutral-900"}`}>₱{opt.estimated_total_cost.toLocaleString('en-PH', {minimumFractionDigits: 2})}</p>
                           <p className="text-xs text-neutral-500 mt-1 font-mono">{opt.distance_km} km away</p>
                         </div>
                       </div>

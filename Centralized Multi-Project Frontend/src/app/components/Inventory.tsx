@@ -2,7 +2,7 @@ import {
   PackageSearch, Plus, Trash2, Upload, Download, Sparkles, AlertTriangle,
   Activity, ListChecks, X, History, Filter, Lock, ArrowDownToLine,
   ArrowUpFromLine, Send, Truck, CheckCircle, FilePlus, BookmarkPlus, Ban,
-  Building2, Flag, Star, ShoppingCart
+  Building2, Flag, Star, ShoppingCart, Info
 } from "lucide-react";
 import React, { useState, useEffect } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
@@ -285,14 +285,30 @@ export function Inventory() {
               <tbody className="divide-y divide-neutral-100">
                 {incomingTransfers.length > 0 ? (
                   incomingTransfers.map((transfer) => {
-                    const sourceSite = sitesList.find((s) => s.id === transfer.source_site_id); const destSite = sitesList.find((s) => s.id === transfer.destination_site_id);
+                    const sourceSite = sitesList.find((s) => s.id === transfer.source_site_id); 
+                    const destSite = sitesList.find((s) => s.id === transfer.destination_site_id);
+                    
+                    const isReceivingManager = destSite?.manager_id === currentUserId;
+                    const isAdmin = currentUserRole !== "staff";
+
                     return (
                       <tr key={transfer.id} className="hover:bg-neutral-50/50 transition-colors">
                         <td className="px-5 py-4 text-neutral-500 font-mono text-xs font-bold">TRK-{transfer.id.toString().padStart(4, "0")}</td>
                         <td className="px-5 py-4"><div className="font-bold text-neutral-900">{transfer.item_name}</div><div className="text-xs text-neutral-500 font-medium mt-0.5">Qty: {transfer.quantity} {transfer.unit}</div></td>
                         <td className="px-5 py-4"><div className="flex flex-col gap-1 text-xs"><span className="flex items-center gap-1 font-medium text-slate-700"><Building2 className="w-3 h-3 text-slate-400" /> From: {sourceSite ? sourceSite.site_name : `Site ${transfer.source_site_id}`}</span><span className="flex items-center gap-1 font-bold text-indigo-700"><MapPin className="w-3 h-3 text-indigo-400" /> To: {destSite ? destSite.site_name : `Site ${transfer.destination_site_id}`}</span></div></td>
                         <td className="px-5 py-4"><span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-amber-100 text-amber-700 border border-amber-200 text-[10px] font-bold uppercase tracking-wider animate-pulse"><Truck className="w-3 h-3" /> In Transit</span></td>
-                        <td className="px-5 py-4 text-right"><div className="flex justify-end gap-2"><button onClick={() => handleCancelTransfer(transfer.id)} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-red-200 hover:bg-red-50 text-red-600 rounded-lg text-xs font-bold transition-colors shadow-sm"><X className="w-3.5 h-3.5" /> Reject</button><button onClick={() => handleAcceptTransfer(transfer.id)} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-colors shadow-sm"><CheckCircle className="w-3.5 h-3.5" /> Accept</button></div></td>
+                        <td className="px-5 py-4 text-right">
+                          <div className="flex justify-end gap-2">
+                            {isReceivingManager ? (
+                              <>
+                                <button onClick={() => handleCancelTransfer(transfer.id)} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-red-200 hover:bg-red-50 text-red-600 rounded-lg text-xs font-bold transition-colors shadow-sm"><X className="w-3.5 h-3.5" /> Reject</button>
+                                <button onClick={() => handleAcceptTransfer(transfer.id)} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-colors shadow-sm"><CheckCircle className="w-3.5 h-3.5" /> Accept</button>
+                              </>
+                            ) : isAdmin ? (
+                              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-neutral-100 text-neutral-500 rounded-lg text-xs font-bold border border-neutral-200 cursor-not-allowed"><Lock className="w-3.5 h-3.5" /> Awaiting Site PM</span>
+                            ) : null}
+                          </div>
+                        </td>
                       </tr>
                     );
                   })
@@ -339,21 +355,40 @@ export function Inventory() {
         </div>
       )}
 
-      {/* --- AUDIT TRAIL TAB --- */}
+      {/* --- AUDIT TRAIL TAB (UPDATED WITH MAJOR TRANSACTION HIGHLIGHTS) --- */}
       {activeTab === "audit" && (
         <div className="bg-white border border-neutral-200 rounded-xl shadow-sm overflow-hidden animate-in slide-in-from-bottom-4">
-          <div className="px-6 py-5 border-b border-neutral-200 bg-slate-900 flex items-center gap-3"><Activity className="w-5 h-5 text-emerald-400" /><h2 className="font-semibold text-white">System Audit Trail</h2></div>
+          <div className="px-6 py-5 border-b border-neutral-200 bg-slate-900 flex items-center gap-3">
+            <Activity className="w-5 h-5 text-emerald-400" />
+            <h2 className="font-semibold text-white">System Audit Trail</h2>
+          </div>
           <div className="p-0">
             {auditLogs.length > 0 ? (
               <div className="divide-y divide-neutral-100">
-                {auditLogs.map((log) => (
-                  <div key={log.id} className="flex items-start gap-4 p-5 hover:bg-neutral-50 transition-colors">
-                    <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center border border-emerald-200 shrink-0 text-emerald-700 font-bold">SA</div>
-                    <div><p className="text-neutral-900 font-medium text-sm leading-relaxed">{log.action}</p><p className="text-xs text-neutral-400 mt-1 font-mono">{log.timestamp}</p></div>
-                  </div>
-                ))}
+                {auditLogs.map((log) => {
+                  const upperAction = log.action.toUpperCase();
+                  const isMajorEvent = upperAction.includes("CANCELLED") || upperAction.includes("REJECTED") || upperAction.includes("CRITICAL");
+                  
+                  return (
+                    <div key={log.id} className={`flex items-start gap-4 p-5 transition-colors ${isMajorEvent ? 'bg-red-50 hover:bg-red-100/80 border-l-4 border-l-red-500' : 'hover:bg-neutral-50'}`}>
+                      <div className={`w-10 h-10 rounded-full flex items-center justify-center border shrink-0 font-bold ${isMajorEvent ? 'bg-red-100 border-red-200 text-red-700' : 'bg-emerald-100 border-emerald-200 text-emerald-700'}`}>
+                        {isMajorEvent ? <AlertTriangle className="w-4 h-4" /> : "SA"}
+                      </div>
+                      <div>
+                        <p className={`font-medium text-sm leading-relaxed ${isMajorEvent ? 'text-red-900' : 'text-neutral-900'}`}>{log.action}</p>
+                        <p className={`text-xs mt-1 font-mono ${isMajorEvent ? 'text-red-500 font-bold' : 'text-neutral-400'}`}>{log.timestamp}</p>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-            ) : (<div className="py-20 text-center"><History className="w-12 h-12 text-neutral-300 mx-auto mb-4" /><h3 className="text-lg font-bold text-neutral-900">No Activity Recorded</h3><p className="text-sm text-neutral-500 mt-1">Actions performed on the database will appear here chronologically.</p></div>)}
+            ) : (
+              <div className="py-20 text-center">
+                <History className="w-12 h-12 text-neutral-300 mx-auto mb-4" />
+                <h3 className="text-lg font-bold text-neutral-900">No Activity Recorded</h3>
+                <p className="text-sm text-neutral-500 mt-1">Actions performed on the database will appear here chronologically.</p>
+              </div>
+            )}
           </div>
         </div>
       )}
