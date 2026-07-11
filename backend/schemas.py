@@ -50,6 +50,7 @@ class SessionResponse(BaseModel):
 class ActivityLogResponse(BaseModel):
     id: int
     user_id: int
+    site_id: Optional[int] = None  # NEW ERP FIX: Track logs by site
     action: str
     timestamp: str 
     is_security_event: bool = False 
@@ -193,10 +194,10 @@ class RequestCreate(BaseModel):
     quantity_needed: float
     unit: str = "Pcs"
     site_id: int
-    inventory_id: Optional[int] = None # Support manual or auto-linked requests
+    inventory_id: Optional[int] = None
 
 class RequestRestock(BaseModel):
-    quantity_needed: float # Used for the 1-click restock button!
+    quantity_needed: float 
 
 class RequestStatusUpdate(BaseModel):
     status: str
@@ -219,7 +220,7 @@ class TransferCreate(BaseModel):
     brand: str = "Generic/No Brand"
     quantity: float
     unit: str
-    linked_request_id: Optional[int] = None # ERP Gold Thread
+    linked_request_id: Optional[int] = None 
 
 class TransferResponse(BaseModel):
     id: int
@@ -242,4 +243,4 @@ class PurchaseOrderCreate(BaseModel):
     material_name: str
     quantity: float
     total_price: float
-    linked_request_id: Optional[int] = None # ERP Gold Thread
+    linked_request_id: Optional[int] = None

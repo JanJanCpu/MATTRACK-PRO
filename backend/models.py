@@ -67,11 +67,16 @@ class ActivityLog(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    
+    # NEW ERP FIX: Allows us to filter logs by specific project sites!
+    site_id = Column(Integer, ForeignKey("project_sites.id"), nullable=True) 
+    
     action = Column(String(255), nullable=False) 
     timestamp = Column(DateTime, default=datetime.datetime.utcnow)
     is_security_event = Column(Boolean, default=False) 
 
     user = relationship("User", back_populates="logs")
+    site = relationship("ProjectSite")
 
 # --- Project Sites ---
 class ProjectSite(Base):
@@ -153,7 +158,7 @@ class SupplierMaterial(Base):
 
     supplier = relationship("Supplier", back_populates="materials")
 
-# --- Material Requests (ERP Upgraded) ---
+# --- Material Requests ---
 class MaterialRequest(Base):
     __tablename__ = "material_requests"
     __table_args__ = {'extend_existing': True}
@@ -165,13 +170,12 @@ class MaterialRequest(Base):
     unit = Column(String, default="Pcs")
     
     site_id = Column(Integer, ForeignKey("project_sites.id"))
-    inventory_id = Column(Integer, ForeignKey("inventory.id"), nullable=True) # Linking to the specific physical shortage
+    inventory_id = Column(Integer, ForeignKey("inventory.id"), nullable=True) 
     requested_by_id = Column(Integer, ForeignKey("users.id"), nullable=True) 
-    approved_by_id = Column(Integer, ForeignKey("users.id"), nullable=True) # Admin Audit Tracker
+    approved_by_id = Column(Integer, ForeignKey("users.id"), nullable=True) 
     
-    # Statuses: Pending Approval, Approved & Routing, Fulfilled, Rejected
     status = Column(String, default="Pending Approval")
-    fulfillment_method = Column(String, nullable=True) # "Internal Transfer" or "External Purchase"
+    fulfillment_method = Column(String, nullable=True) 
     
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     
@@ -192,7 +196,6 @@ class MaterialTransfer(Base):
     source_site_id = Column(Integer, ForeignKey("project_sites.id"), nullable=False)
     destination_site_id = Column(Integer, ForeignKey("project_sites.id"), nullable=False)
     
-    # --- ERP GOLDEN THREAD ---
     linked_request_id = Column(Integer, ForeignKey("material_requests.id"), nullable=True)
 
     status = Column(String, default=TransferStatus.IN_TRANSIT.value)
@@ -227,7 +230,6 @@ class PurchaseOrder(Base):
     supplier_id = Column(Integer, ForeignKey("suppliers.id"))
     site_id = Column(Integer, ForeignKey("project_sites.id"))
     
-    # --- ERP GOLDEN THREAD ---
     linked_request_id = Column(Integer, ForeignKey("material_requests.id"), nullable=True)
     
     material_name = Column(String)

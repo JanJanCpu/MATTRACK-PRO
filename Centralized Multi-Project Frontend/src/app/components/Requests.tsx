@@ -2,7 +2,8 @@ import React, { useState, useEffect } from "react";
 import { createPortal } from "react-dom";
 import {
   ClipboardList, Plus, Clock, CheckCircle, XCircle, Truck, Building2,
-  Sparkles, Loader, PackageOpen, Navigation, X, AlertTriangle, Send, Lock, Trash2, Info
+  Sparkles, Loader, PackageOpen, Navigation, X, AlertTriangle, Send, Lock, Trash2,
+  Star, ShieldCheck, AlertCircle, ShoppingCart, Pencil, Save
 } from "lucide-react";
 import { requestsAPI, sitesAPI, purchaseOrdersAPI, transferAPI, procurementAPI } from "../../services/apiService";
 import type { MaterialRequest, ProjectSite } from "../../types";
@@ -22,20 +23,28 @@ export function Requests() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   
   const [formData, setFormData] = useState({
-    item_name: "", brand: "Generic/No Brand", quantity_needed: "", unit: "Pcs", site_id: "",
+    item_name: "", brand: "", quantity_needed: "", unit: "Pcs", site_id: "",
   });
 
-  // --- NEW ERP SOURCING STATE ---
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
+
+  const [cart, setCart] = useState<any[]>([]);
+
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editingRequest, setEditingRequest] = useState<MaterialRequest | null>(null);
+  const [editForm, setEditForm] = useState({ item_name: "", brand: "", quantity_needed: "", unit: "" });
 
   const [showAdvisorModal, setShowAdvisorModal] = useState(false);
   const [activeRequest, setActiveRequest] = useState<MaterialRequest | null>(null);
   const [advisorOptions, setAdvisorOptions] = useState<any[]>([]);
   const [isAdvisorLoading, setIsAdvisorLoading] = useState(false);
   const [hasScanned, setHasScanned] = useState(false);
+
+  // --- NEW UX FEATURE: Extract Historic Brands from Request History for Autosuggest Memory ---
+  const historicBrands = Array.from(new Set(requests.map(r => r.brand).filter(b => b && b.trim() !== "" && b !== "Generic/No Brand")));
 
   const fetchData = async () => {
     setLoading(true);
@@ -67,7 +76,7 @@ export function Requests() {
       const item = location.state.autoFillItem;
       const suggestedQty = Math.max(1, item.baseline_quantity - item.quantity);
       setFormData(prev => ({
-        ...prev, item_name: item.item_name, brand: item.brand || "Generic/No Brand",
+        ...prev, item_name: item.item_name, brand: item.brand || "",
         unit: item.unit || "Pcs", quantity_needed: suggestedQty.toString(), site_id: item.site_id.toString()
       }));
       setSearchQuery(item.item_name);
@@ -76,7 +85,6 @@ export function Requests() {
     }
   }, [location.state, navigate]);
 
-  // --- GLOBAL SOURCING DISCOVERY ENGINE ---
   useEffect(() => {
     if (!searchQuery || searchQuery.length < 2 || !formData.site_id) {
       setSearchResults([]);
@@ -109,21 +117,65 @@ export function Requests() {
     setShowDropdown(false);
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleAddToCart = (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.site_id || !formData.item_name || !formData.quantity_needed) return;
+    
+    setCart([...cart, { 
+      ...formData, 
+      brand: formData.brand.trim() || "Generic/No Brand", 
+      quantity_needed: Number(formData.quantity_needed) 
+    }]);
+    
+    setFormData({ ...formData, item_name: "", brand: "", quantity_needed: "", unit: "Pcs" });
+    setSearchQuery("");
+  };
+
+  const handleRemoveFromCart = (index: number) => {
+    setCart(cart.filter((_, i) => i !== index));
+  };
+
+  const handleBulkSubmit = async () => {
+    if (cart.length === 0) return;
     setIsSubmitting(true);
     try {
-      await requestsAPI.create({
-        item_name: formData.item_name, brand: formData.brand, quantity_needed: Number(formData.quantity_needed),
-        unit: formData.unit, site_id: Number(formData.site_id), status: "Pending Approval"
-      });
-      alert("Material Request submitted to the Main Office.");
+      await requestsAPI.bulkCreate(cart);
+      alert(`✅ Successfully submitted ${cart.length} items to the Main Office!`);
+      setCart([]);
       setShowForm(false);
-      setFormData({ item_name: "", brand: "Generic/No Brand", quantity_needed: "", unit: "Pcs", site_id: formData.site_id });
-      setSearchQuery("");
       fetchData();
-    } catch (error) { alert("Failed to submit request."); } finally { setIsSubmitting(false); }
+    } catch (error) { 
+      alert("Failed to submit bulk request."); 
+    } finally { 
+      setIsSubmitting(false); 
+    }
+  };
+
+  const handleOpenEdit = (req: MaterialRequest) => {
+    setEditingRequest(req);
+    setEditForm({
+      item_name: req.item_name,
+      brand: req.brand || "Generic/No Brand",
+      quantity_needed: req.quantity_needed.toString(),
+      unit: req.unit
+    });
+    setShowEditModal(true);
+  };
+
+  const handleSaveEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingRequest) return;
+    try {
+      await requestsAPI.edit(editingRequest.id, {
+        ...editForm,
+        quantity_needed: Number(editForm.quantity_needed)
+      });
+      alert("Request modified successfully.");
+      setShowEditModal(false);
+      fetchData();
+    } catch (err) {
+      alert("Failed to update the request.");
+    }
   };
 
   const handleStatusUpdate = async (reqId: number, newStatus: string) => {
@@ -203,7 +255,7 @@ export function Requests() {
           </p>
         </div>
         {userRole === "staff" && (
-          <button onClick={() => setShowForm(!showForm)} className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-bold flex items-center gap-2 hover:bg-indigo-700 transition-all shadow-sm">
+          <button onClick={() => { setShowForm(!showForm); setCart([]); }} className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-bold flex items-center gap-2 hover:bg-indigo-700 transition-all shadow-sm">
             {showForm ? "Cancel Request" : <><Plus className="w-4 h-4" /> Manual Request</>}
           </button>
         )}
@@ -211,16 +263,15 @@ export function Requests() {
 
       {showForm && (
         <div className="bg-white p-6 rounded-xl border border-indigo-100 shadow-sm animate-in slide-in-from-top-4">
-          <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+          <form onSubmit={handleAddToCart} className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end mb-6">
             <div>
               <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Target Project Site</label>
-              <select required value={formData.site_id} onChange={(e) => setFormData({ ...formData, site_id: e.target.value })} className="w-full p-2 border rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-medium bg-neutral-50">
+              <select required disabled={cart.length > 0} value={formData.site_id} onChange={(e) => setFormData({ ...formData, site_id: e.target.value })} className="w-full p-2 border rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-medium bg-neutral-50 disabled:opacity-50">
                 <option value="">Select your site...</option>
                 {editableSites.map(site => ( <option key={site.id} value={site.id}>{site.site_name}</option> ))}
               </select>
             </div>
             
-            {/* --- NEW B2B SOURCING DISCOVERY ENGINE UI --- */}
             <div className="md:col-span-2 relative">
               <label className="block text-xs font-bold text-slate-500 uppercase mb-1 flex items-center gap-1">
                 Material Search (Global Sourcing) {isSearching && <Loader className="w-3 h-3 animate-spin text-emerald-500"/>}
@@ -266,26 +317,72 @@ export function Requests() {
               )}
             </div>
 
+            {/* --- NEW UX FEATURE: Autosuggest Brand Input --- */}
             <div className="md:col-span-1">
               <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Brand/Specs</label>
-              <input type="text" placeholder="e.g. Republic" value={formData.brand} onChange={(e) => setFormData({ ...formData, brand: e.target.value })} className="w-full p-2 border rounded-lg text-sm bg-slate-50 focus:ring-2 focus:ring-slate-900 outline-none" />
+              <input type="text" list="historic-brands" placeholder="e.g. Republic (Optional)" value={formData.brand} onChange={(e) => setFormData({ ...formData, brand: e.target.value })} className="w-full p-2 border rounded-lg text-sm bg-slate-50 focus:ring-2 focus:ring-slate-900 outline-none" />
+              <datalist id="historic-brands">
+                {historicBrands.map(b => <option key={b} value={b} />)}
+              </datalist>
             </div>
+            
             <div>
-              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Quantity Needed</label>
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Quantity</label>
               <input type="number" required placeholder="0" min="1" value={formData.quantity_needed} onChange={(e) => setFormData({ ...formData, quantity_needed: e.target.value })} className="w-full p-2 border rounded-lg text-sm bg-slate-50 focus:ring-2 focus:ring-slate-900 outline-none font-bold" />
             </div>
+            
+            {/* --- NEW UX FEATURE: Custom Unit Combo Box --- */}
             <div>
               <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Unit</label>
-              <select value={formData.unit} onChange={(e) => setFormData({ ...formData, unit: e.target.value })} className="w-full p-2 border rounded-lg text-sm bg-slate-50 focus:ring-2 focus:ring-slate-900 outline-none">
-                <option value="Bags">Bags</option><option value="Pcs">Pcs</option><option value="Cu.m">Cu.m</option><option value="Kilos">Kilos</option><option value="Unit">Unit</option>
-              </select>
+              <input type="text" list="unit-options" value={formData.unit} onChange={(e) => setFormData({ ...formData, unit: e.target.value })} className="w-full p-2 border rounded-lg text-sm bg-slate-50 focus:ring-2 focus:ring-slate-900 outline-none" placeholder="e.g. Bags" required />
+              <datalist id="unit-options">
+                <option value="Bags"/><option value="Pcs"/><option value="Cu.m"/><option value="Kilos"/><option value="Unit"/><option value="Gallons"/><option value="Rolls"/>
+              </datalist>
             </div>
+            
             <div className="md:col-span-2 flex justify-end mt-2">
-              <button type="submit" disabled={isSubmitting} className="w-full bg-slate-900 text-white px-6 py-2.5 rounded-lg font-bold hover:bg-slate-800 transition-colors flex items-center justify-center gap-2">
-                {isSubmitting ? <Loader className="w-4 h-4 animate-spin" /> : <><Send className="w-4 h-4"/> Submit Request to Admin</>}
+              <button type="submit" className="w-full bg-slate-100 text-slate-700 border border-slate-300 px-6 py-2.5 rounded-lg font-bold hover:bg-slate-200 transition-colors flex items-center justify-center gap-2">
+                <Plus className="w-4 h-4"/> Add to List
               </button>
             </div>
           </form>
+
+          {/* TABULATED CART VIEW */}
+          {cart.length > 0 && (
+            <div className="border border-emerald-200 rounded-xl overflow-hidden bg-white animate-in slide-in-from-bottom-4">
+              <div className="bg-emerald-50 px-4 py-3 border-b border-emerald-100 flex items-center justify-between">
+                <h3 className="font-bold text-emerald-800 flex items-center gap-2"><ShoppingCart className="w-4 h-4" /> Ready to Submit ({cart.length} items)</h3>
+                <span className="text-xs font-bold text-emerald-600 bg-emerald-100 px-2 py-1 rounded">Target: {sites.find(s => s.id === Number(cart[0].site_id))?.site_name}</span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm text-left whitespace-nowrap">
+                  <thead className="bg-white text-slate-500 border-b border-neutral-100">
+                    <tr>
+                      <th className="px-4 py-2 font-bold">Material & Brand</th>
+                      <th className="px-4 py-2 font-bold text-center">Quantity</th>
+                      <th className="px-4 py-2 font-bold text-center">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-neutral-50">
+                    {cart.map((item, idx) => (
+                      <tr key={idx} className="hover:bg-neutral-50">
+                        <td className="px-4 py-3"><div className="font-bold text-slate-900">{item.item_name}</div><div className="text-xs text-slate-500">{item.brand}</div></td>
+                        <td className="px-4 py-3 text-center font-black text-indigo-600">{item.quantity_needed} <span className="text-xs font-medium text-slate-500">{item.unit}</span></td>
+                        <td className="px-4 py-3 text-center">
+                          <button onClick={() => handleRemoveFromCart(idx)} className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"><X className="w-4 h-4"/></button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="p-4 bg-neutral-50 flex justify-end">
+                <button onClick={handleBulkSubmit} disabled={isSubmitting} className="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-2.5 rounded-lg font-bold transition-colors shadow-sm flex items-center gap-2">
+                  {isSubmitting ? <Loader className="w-4 h-4 animate-spin" /> : <><Send className="w-4 h-4" /> Submit All to Main Office</>}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -334,9 +431,14 @@ export function Requests() {
                         ) : (
                           <div className="flex items-center justify-end gap-2">
                             {isPending && (
-                              <button onClick={() => runAdvisor(req)} className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors text-xs font-bold inline-flex items-center gap-1.5 shadow-sm">
-                                <Sparkles className="w-3.5 h-3.5" /> Fulfill
-                              </button>
+                              <>
+                                <button onClick={() => handleOpenEdit(req)} className="p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 rounded-md transition-colors" title="Edit Quantity or Details">
+                                  <Pencil className="w-4 h-4" />
+                                </button>
+                                <button onClick={() => runAdvisor(req)} className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors text-xs font-bold inline-flex items-center gap-1.5 shadow-sm">
+                                  <Sparkles className="w-3.5 h-3.5" /> Fulfill
+                                </button>
+                              </>
                             )}
                             <select value={req.status} onChange={(e) => handleStatusUpdate(req.id, e.target.value)} className="bg-white border border-neutral-300 text-neutral-700 text-xs font-bold rounded-lg px-2 py-1.5 outline-none focus:ring-2 focus:ring-indigo-500">
                               <option value="Pending Approval">Pending</option>
@@ -358,15 +460,51 @@ export function Requests() {
         </table>
       </div>
 
+      {/* --- ADMIN EDIT MODAL WITH COMBO BOXES --- */}
+      {showEditModal && editingRequest && createPortal(
+        <div className="fixed inset-0 bg-black/60 z-[9999] flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden">
+            <div className="p-4 border-b flex justify-between items-center bg-slate-50">
+              <h3 className="font-bold text-slate-800 flex items-center gap-2"><Pencil className="w-4 h-4 text-blue-600" /> Edit Material Request</h3>
+              <button onClick={() => setShowEditModal(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5"/></button>
+            </div>
+            <form onSubmit={handleSaveEdit} className="p-5 space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Item Name</label>
+                <input type="text" required value={editForm.item_name} onChange={e => setEditForm({...editForm, item_name: e.target.value})} className="w-full p-2 border rounded-lg text-sm bg-slate-50 outline-none focus:ring-2 focus:ring-blue-600 font-bold" />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Brand</label>
+                <input type="text" list="historic-brands" required value={editForm.brand} onChange={e => setEditForm({...editForm, brand: e.target.value})} className="w-full p-2 border rounded-lg text-sm bg-slate-50 outline-none focus:ring-2 focus:ring-blue-600" />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Quantity (Approved)</label>
+                  <input type="number" required min="1" value={editForm.quantity_needed} onChange={e => setEditForm({...editForm, quantity_needed: e.target.value})} className="w-full p-2 border rounded-lg text-sm bg-blue-50 text-blue-900 outline-none focus:ring-2 focus:ring-blue-600 font-black text-center" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Unit</label>
+                  <input type="text" list="unit-options" required value={editForm.unit} onChange={e => setEditForm({...editForm, unit: e.target.value})} className="w-full p-2 border rounded-lg text-sm bg-slate-50 outline-none focus:ring-2 focus:ring-blue-600 font-medium text-center" />
+                </div>
+              </div>
+              <div className="pt-4 flex gap-2">
+                <button type="button" onClick={() => setShowEditModal(false)} className="flex-1 py-2.5 font-bold text-slate-600 border border-slate-200 hover:bg-slate-50 rounded-lg transition-colors text-sm">Cancel</button>
+                <button type="submit" className="flex-1 py-2.5 font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-sm flex items-center justify-center gap-2 text-sm"><Save className="w-4 h-4"/> Save Modifications</button>
+              </div>
+            </form>
+          </div>
+        </div>, document.body
+      )}
+
       {showAdvisorModal && activeRequest && createPortal(
         <div className="fixed inset-0 bg-black/60 z-[9999] flex items-center justify-center p-4 animate-in fade-in">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[80vh]">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl overflow-hidden flex flex-col max-h-[85vh]">
             <div className="p-4 border-b bg-slate-900 border-slate-800 flex justify-between items-center text-white">
               <h2 className="text-lg font-bold flex items-center gap-2"><Sparkles className="w-5 h-5 text-emerald-400" /> Fulfillment Advisory Engine</h2>
               <button onClick={() => setShowAdvisorModal(false)} className="p-1 hover:bg-white/10 rounded-md transition-colors"><X className="w-5 h-5" /></button>
             </div>
 
-            <div className="p-6 overflow-y-auto flex-1 bg-neutral-50">
+            <div className="p-6 overflow-y-auto flex-1 bg-neutral-100">
               <div className="mb-6 bg-white p-4 rounded-xl border border-neutral-200 shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                 <div>
                   <p className="text-xs text-neutral-500 font-bold uppercase tracking-wider">Requested Material</p>
@@ -402,43 +540,63 @@ export function Requests() {
                 </div>
               )}
 
-              {/* --- UI DECOUPLING OF SUPPLIER STOCK DATA --- */}
               {!isAdvisorLoading && hasScanned && advisorOptions.length > 0 && (
-                <div className="space-y-4">
+                <div className="space-y-3">
                   {advisorOptions.map((opt, index) => (
-                    <div key={index} className={`p-5 rounded-xl border shadow-sm ${index === 0 ? "border-emerald-400 bg-emerald-50" : "border-neutral-200 bg-white"}`}>
-                      <div className="flex flex-col sm:flex-row justify-between items-start gap-4 mb-4">
-                        <div>
-                          <div className="flex items-center gap-2 mb-1">
-                            {index === 0 && <span className="bg-emerald-500 text-white text-[10px] px-2 py-0.5 rounded font-bold uppercase tracking-wider">Recommended</span>}
-                            <span className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase tracking-wider ${opt.type === "EXTERNAL_PURCHASE" ? "bg-blue-100 text-blue-700" : "bg-purple-100 text-purple-700"}`}>{opt.type.replace("_", " ")}</span>
-                          </div>
-                          <h3 className="text-lg font-bold text-neutral-900">{opt.source_name}</h3>
-                          
-                          {/* DECOUPLED UI METRICS */}
-                          <div className="flex items-center gap-3 mt-2">
-                            <span className="inline-flex items-center gap-1 text-[10px] font-bold text-slate-700 bg-slate-200/50 px-2 py-1 rounded">
-                              <PackageOpen className="w-3 h-3 text-slate-500"/> 
-                              Stock Available: {opt.available_stock} {opt.unit}
+                    <div key={index} className={`p-4 rounded-xl border bg-white shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between transition-all hover:shadow-md ${
+                        index === 0 ? "border-emerald-500 ring-1 ring-emerald-500 bg-emerald-50/10" : "border-neutral-200"
+                      }`}
+                    >
+                      <div className="flex-1 w-full mb-4 sm:mb-0">
+                        <div className="flex items-center gap-2 mb-1 flex-wrap">
+                          <h3 className="font-bold text-neutral-800 text-base">{opt.source_name}</h3>
+                          {opt.type === "INTERNAL_TRANSFER" ? (
+                            <span className="px-2 py-0.5 bg-violet-100 text-violet-700 text-[10px] font-bold rounded-full flex items-center gap-1">
+                              <Truck className="w-3 h-3" /> {opt.trust_badge || "Internal Surplus"}
                             </span>
-                            {opt.unit_price > 0 && (
-                              <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2 py-1 rounded">
-                                Unit Price: ₱{opt.unit_price.toFixed(2)}
-                              </span>
-                            )}
-                          </div>
+                          ) : (
+                            <span className={`px-2 py-0.5 text-[10px] font-bold rounded-full flex items-center gap-1 ${
+                              opt.rating >= 4.0 ? "bg-emerald-100 text-emerald-700" : "bg-neutral-100 text-neutral-600"
+                            }`}>
+                              {opt.rating >= 4.0 ? <ShieldCheck className="w-3 h-3" /> : <AlertCircle className="w-3 h-3" />} 
+                              {opt.trust_badge || (opt.rating >= 4.0 ? "Verified Trusted" : "Standard Supplier")}
+                            </span>
+                          )}
                           
+                          <div className="flex items-center ml-2">
+                            <Star className="w-4 h-4 fill-yellow-400 text-yellow-400" />
+                            <span className="text-xs font-bold text-neutral-700 ml-1">{opt.rating ? opt.rating.toFixed(1) : "5.0"}</span>
+                          </div>
                         </div>
-                        <div className="text-left sm:text-right">
-                          <p className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider">Total Est. Cost</p>
-                          <p className={`text-2xl font-black ${index === 0 ? "text-emerald-700" : "text-neutral-900"}`}>₱{opt.estimated_total_cost.toLocaleString('en-PH', {minimumFractionDigits: 2})}</p>
-                          <p className="text-xs text-neutral-500 mt-1 font-mono">{opt.distance_km} km away</p>
+
+                        <p className="text-xs text-neutral-500 mb-2">{opt.recommendation_reason}</p>
+                        
+                        <div className="flex items-center gap-3">
+                          <span className="inline-flex items-center gap-1 text-[10px] font-bold text-slate-700 bg-slate-100 px-2 py-1 rounded">
+                            <PackageOpen className="w-3 h-3 text-slate-500"/> 
+                            Stock: {opt.available_stock} {opt.unit}
+                          </span>
+                          <span className="text-xs font-medium text-neutral-700">
+                            Distance: <span className="font-bold">{opt.distance_km} km</span>
+                          </span>
                         </div>
                       </div>
 
-                      <div className="pt-4 border-t border-black/5 flex justify-end">
-                        <button onClick={() => handleExecuteFulfillment(opt)} className={`px-4 py-2 rounded-lg text-sm font-bold text-white transition-colors shadow-sm ${opt.type === "EXTERNAL_PURCHASE" ? "bg-blue-600 hover:bg-blue-700" : "bg-purple-600 hover:bg-purple-700"}`}>
-                          {opt.type === "EXTERNAL_PURCHASE" ? "Approve & Buy" : "Approve & Transfer"}
+                      <div className="text-left sm:text-right sm:ml-4 sm:border-l sm:border-neutral-100 sm:pl-4 w-full sm:w-36 shrink-0 flex flex-col justify-end">
+                        <p className="text-[10px] text-neutral-400 font-medium uppercase">Total Est. Cost</p>
+                        <p className={`text-xl font-black mb-2 ${index === 0 ? "text-emerald-600" : "text-slate-700"}`}>
+                          ₱{opt.estimated_total_cost.toLocaleString('en-PH', {minimumFractionDigits: 2})}
+                        </p>
+                        
+                        <button 
+                          onClick={() => handleExecuteFulfillment(opt)}
+                          className={`px-4 py-2 text-xs font-bold rounded-lg shadow-sm w-full transition-all ${
+                            opt.type === "INTERNAL_TRANSFER" 
+                              ? "bg-violet-600 hover:bg-violet-700 text-white" 
+                              : "bg-blue-600 hover:bg-blue-700 text-white"
+                          }`}
+                        >
+                          {opt.type === "INTERNAL_TRANSFER" ? "Approve Transfer" : "Approve PO"}
                         </button>
                       </div>
                     </div>

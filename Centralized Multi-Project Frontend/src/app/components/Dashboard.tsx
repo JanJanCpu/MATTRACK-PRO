@@ -193,20 +193,35 @@ export function Dashboard() {
               <div className="overflow-x-auto flex-1">
                 <table className="w-full text-left text-sm">
                   <thead className="bg-neutral-50 text-neutral-500 border-b">
-                    <tr><th className="px-6 py-3 font-medium">Project</th><th className="px-6 py-3 font-medium">Progress</th><th className="px-6 py-3 font-medium">Status</th><th className="px-6 py-3 font-medium">Shortages</th><th className="px-6 py-3 font-medium text-right">Actions</th></tr>
+                    <tr>
+                      {/* --- FIX: ADDED MIN/MAX WIDTH TO PROJECT COLUMN --- */}
+                      <th className="px-6 py-3 font-medium min-w-[200px] max-w-[300px]">Project</th>
+                      <th className="px-6 py-3 font-medium">Progress</th>
+                      <th className="px-6 py-3 font-medium">Status</th>
+                      <th className="px-6 py-3 font-medium">Shortages</th>
+                      <th className="px-6 py-3 font-medium text-right">Actions</th>
+                    </tr>
                   </thead>
                   <tbody className="divide-y">
                     {sortedProjects.map((p) => {
                       const canEdit = currentUserRole !== "staff" || p.manager_id === currentUserId;
                       return (
                         <tr key={p.id} onClick={() => navigate(`/projects`)} className={`hover:bg-emerald-50/50 cursor-pointer group transition-colors border-b border-neutral-100 last:border-0 ${canEdit && currentUserRole === 'staff' ? 'bg-indigo-50/20' : ''}`}>
-                          <td className="px-6 py-4">
-                            <div className="font-bold text-neutral-900 group-hover:text-emerald-600 transition-colors flex items-center gap-2">
-                              {p.name}
-                              {canEdit && currentUserRole === "staff" && (<span className="px-1.5 py-0.5 bg-indigo-100 text-indigo-700 text-[9px] font-black tracking-widest uppercase rounded flex items-center gap-1"><Star className="w-2.5 h-2.5 fill-indigo-700" /> Your Site</span>)}
+                          
+                          {/* --- FIX: TRUNCATION LOGIC ADDED HERE --- */}
+                          <td className="px-6 py-4 min-w-[200px] max-w-[300px]">
+                            <div className="min-w-0"> 
+                              <div 
+                                className="font-bold text-neutral-900 group-hover:text-emerald-600 transition-colors flex items-center gap-2 truncate"
+                                title={p.name} // Tooltip added so they can see full name on hover
+                              >
+                                <span className="truncate">{p.name}</span>
+                                {canEdit && currentUserRole === "staff" && (<span className="shrink-0 px-1.5 py-0.5 bg-indigo-100 text-indigo-700 text-[9px] font-black tracking-widest uppercase rounded flex items-center gap-1"><Star className="w-2.5 h-2.5 fill-indigo-700" /> Your Site</span>)}
+                              </div>
+                              <div className="text-xs text-neutral-400 font-mono mt-0.5 truncate">{p.id}</div>
                             </div>
-                            <div className="text-xs text-neutral-400 font-mono mt-0.5">{p.id}</div>
                           </td>
+
                           <td className="px-6 py-4 min-w-[150px]">
                             <div className="flex items-center justify-between mb-1"><span className="text-[10px] font-bold text-neutral-500 uppercase">{p.stage_status}</span><span className="text-[10px] font-bold text-neutral-900">{p.progress}%</span></div>
                             <div className="w-full h-1.5 bg-neutral-200 rounded-full overflow-hidden"><div className={`h-full rounded-full transition-all duration-500 ${p.progress < 30 ? "bg-red-500" : p.progress < 70 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${p.progress}%` }}/></div>

@@ -65,6 +65,8 @@ export const sitesAPI = {
   create: (siteData: any) => fetchAPI<ProjectSite>(`${BASE_URL}/sites/`, { method: "POST", body: JSON.stringify(siteData) }),
   list: () => fetchAPI<ProjectSite[]>(`${BASE_URL}/sites/`),
   updateStatus: (id: number, stage_status: string) => fetchAPI<ProjectSite>(`${BASE_URL}/sites/${id}/status`, { method: "PATCH", body: JSON.stringify({ stage_status }) }),
+  // --- NEW ERP FIX: Fetch logs specific to a single site ---
+  getAuditLogs: (site_id: number) => fetchAPI<any[]>(`${BASE_URL}/sites/${site_id}/audit-logs`),
 };
 
 // --- 2. INVENTORY APIs ---
@@ -96,22 +98,14 @@ export const suppliersAPI = {
         rating: Number(data.rating),
       }),
     }),
-
   list: () => fetchAPI<Supplier[]>(`${BASE_URL}/suppliers/`),
-  
-  // ---> NEW: Fetches recently transacted hardware stores
   getRecent: () => fetchAPI<Supplier[]>(`${BASE_URL}/suppliers/recent`),
-
   updateRating: (id: number, rating: number) =>
     fetchAPI<any>(`${BASE_URL}/suppliers/${id}/rating`, {
       method: "PATCH",
       body: JSON.stringify({ rating: Number(rating) }),
     }),
-
-  delete: (id: number) =>
-    fetchAPI<any>(`${BASE_URL}/suppliers/${id}`, {
-      method: "DELETE",
-    }),
+  delete: (id: number) => fetchAPI<any>(`${BASE_URL}/suppliers/${id}`, { method: "DELETE" }),
 };
 
 // --- 5. ADVISORY APIs ---
@@ -120,7 +114,7 @@ export const advisoryAPI = {
   chat: (prompt: string, history: { role: string; content: string }[]) => fetchAPI<any>(`${BASE_URL}/advisory/chat`, { method: "POST", body: JSON.stringify({ message: prompt, context: { history } }) }),
 };
 
-// --- NEW: PROCUREMENT GLOBAL DISCOVERY APIs ---
+// --- PROCUREMENT GLOBAL DISCOVERY APIs ---
 export const procurementAPI = {
   discover: (site_id: number, query: string) => fetchAPI<any[]>(`${BASE_URL}/procurement/discover?site_id=${site_id}&query=${encodeURIComponent(query)}`),
   getRecentSuppliers: () => fetchAPI<any[]>(`${BASE_URL}/suppliers/recent`),
@@ -130,6 +124,12 @@ export const procurementAPI = {
 export const requestsAPI = {
   create: (item: Omit<MaterialRequest, "id">) => fetchAPI<MaterialRequest>(`${BASE_URL}/requests/`, { method: "POST", body: JSON.stringify(item) }),
   
+  // --- NEW ERP FIX: BULK "SHOPPING CART" REQUESTS ---
+  bulkCreate: (items: any[]) => fetchAPI<MaterialRequest[]>(`${BASE_URL}/requests/bulk`, { method: "POST", body: JSON.stringify(items) }),
+  
+  // --- NEW ERP FIX: ADMIN REQUEST EDITING ---
+  edit: (id: number, data: any) => fetchAPI<MaterialRequest>(`${BASE_URL}/requests/${id}/edit`, { method: "PATCH", body: JSON.stringify(data) }),
+
   restock: (inventory_id: number, quantity_needed: number) => 
     fetchAPI<MaterialRequest>(`${BASE_URL}/requests/restock/${inventory_id}`, {
       method: "POST",
@@ -138,7 +138,6 @@ export const requestsAPI = {
 
   list: () => fetchAPI<MaterialRequest[]>(`${BASE_URL}/requests/`),
   updateStatus: (id: number, status: string) => fetchAPI<MaterialRequest>(`${BASE_URL}/requests/${id}/status`, { method: "PATCH", body: JSON.stringify({ status }) }),
-  
   delete: (id: number) => fetchAPI(`${BASE_URL}/requests/${id}`, { method: "DELETE" }),
 };
 

@@ -16,7 +16,7 @@ import {
   ShoppingCart,
   Package,
   MapPin,
-  ClipboardList, // Added for Requests
+  ClipboardList,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import {
@@ -97,13 +97,13 @@ export function Layout() {
   const [userName, setUserName] = useState("User");
 
   const [pmSiteName, setPmSiteName] = useState<string | null>(null);
+  const [pmFullSiteList, setPmFullSiteList] = useState<string>(""); 
 
   const [notifications, setNotifications] = useState<any[]>([]);
 
   const [globalInventory, setGlobalInventory] = useState<any[]>([]);
   const [globalSites, setGlobalSites] = useState<any[]>([]);
 
-  // --- Track the seller's inventory count ---
   const [sellerItemCount, setSellerItemCount] = useState(0);
 
   const location = useLocation();
@@ -132,14 +132,11 @@ export function Layout() {
         setNotifications(notifs);
 
         if (currentUserRole === "seller") {
-          // Dynamic hostname fix to prevent network trap crashes
           const baseUrl = `http://${window.location.hostname}:8000`;
           const response = await fetch(
             `${baseUrl}/seller/materials`,
             {
-              headers: {
-                Authorization: `Bearer ${localStorage.getItem("token")}`,
-              },
+              headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
             }
           );
           if (response.ok) {
@@ -154,14 +151,19 @@ export function Layout() {
           setGlobalInventory(invData);
           setGlobalSites(sitesData);
 
-          // Accepts both 'staff' and 'pm' nomenclature from token
+          // --- NEW UX FEATURE: Multi-Site Operating Context Scanner ---
           if (["staff", "pm"].includes(currentUserRole) && currentUserId) {
-            const assignedSite = sitesData.find(
-              (site) => site.manager_id === currentUserId
-            );
-            setPmSiteName(
-              assignedSite ? assignedSite.site_name : "Unassigned User"
-            );
+            const assignedSites = sitesData.filter((site) => site.manager_id === currentUserId);
+            if (assignedSites.length === 1) {
+              setPmSiteName(assignedSites[0].site_name);
+            } else if (assignedSites.length > 1) {
+              // If they manage 3 sites, show "3 Sites (Makati, Paco, Tondo)"
+              setPmSiteName(`${assignedSites.length} Sites (${assignedSites.map(s => s.site_name).join(', ')})`);
+              setPmFullSiteList(assignedSites.map(s => s.site_name).join(' • '));
+            } else {
+              setPmSiteName("Unassigned / Main HQ");
+              setPmFullSiteList("Unassigned / Main HQ"); 
+            }
           }
         }
       } catch (err) {
@@ -291,7 +293,6 @@ export function Layout() {
                   {item.name}
                 </div>
 
-                {/* --- The Badge specifically for the seller catalog --- */}
                 {item.name === "My Catalog" && userRole === "seller" && (
                   <span className="bg-blue-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">
                     {sellerItemCount}
@@ -333,7 +334,6 @@ export function Layout() {
               <Menu className="w-5 h-5" />
             </button>
 
-            {/* --- SECURITY FIX: Hide Internal Data Search from Sellers --- */}
             {userRole !== "seller" && (
               <div className="hidden md:flex items-center relative group">
                 <Search className="w-4 h-4 absolute left-3 text-neutral-400" />
@@ -430,26 +430,28 @@ export function Layout() {
           </div>
 
           <div className="flex items-center gap-4">
-            <div className="hidden lg:flex items-center gap-2 px-3 py-1.5 bg-slate-100 border border-slate-200 rounded-full text-xs font-bold text-slate-700">
-              {["staff", "pm"].includes(userRole) && pmSiteName ? (
+            
+            {/* --- NEW UX FEATURE: Adaptive Multi-Site Layout with text truncation --- */}
+<div 
+              className="hidden lg:flex items-center gap-2 px-3 py-1.5 bg-slate-100 border border-slate-200 rounded-full text-xs font-bold text-slate-700 max-w-[250px] xl:max-w-md cursor-default"
+              title={pmFullSiteList} // <-- Add the hover tooltip here!
+            >              {["staff", "pm"].includes(userRole) && pmSiteName ? (
                 <>
-                  <MapPin className="w-3.5 h-3.5 text-emerald-600" />
-                  Operating Context:{" "}
-                  <span className="text-emerald-700">{pmSiteName}</span>
+                  <MapPin className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <span className="shrink-0">Operating Context:</span>
+                  <span className="text-emerald-700 truncate">{pmSiteName}</span>
                 </>
               ) : userRole === "seller" ? (
                 <>
-                  <Store className="w-3.5 h-3.5 text-blue-600" />
-                  Operating Context:{" "}
-                  <span className="text-blue-700">
-                    External Supplier Portal
-                  </span>
+                  <Store className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                  <span className="shrink-0">Operating Context:</span>
+                  <span className="text-blue-700 truncate">External Supplier Portal</span>
                 </>
               ) : (
                 <>
-                  <LayoutDashboard className="w-3.5 h-3.5 text-blue-600" />
-                  Operating Context:{" "}
-                  <span className="text-blue-700">Global Admin View</span>
+                  <LayoutDashboard className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                  <span className="shrink-0">Operating Context:</span>
+                  <span className="text-blue-700 truncate">Global Admin View</span>
                 </>
               )}
             </div>

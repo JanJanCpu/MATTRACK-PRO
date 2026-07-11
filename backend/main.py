@@ -35,7 +35,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-models.Base.metadata.create_all(bind=engine) 
+models.Base.metadata.create_all(bind=engine)
 
 SECRET_KEY = os.environ.get("SECRET_KEY", "SUPER_SECRET_SECURITY_TOKEN_REPLACE_THIS_FOR_PRODUCTION")
 ALGORITHM = "HS256"
@@ -75,13 +75,65 @@ def get_real_travel_time(lat1, lon1, lat2, lon2):
         response = requests.get(url, timeout=2).json()
         return round(response['routes'][0]['duration'] / 60, 2)
     except: return None 
+
+# --- CLASSMATE'S LIVE FUEL API WITH SAFE MEMORY CACHE ---
+_cached_diesel_price = None
+_last_fetch_time = None
+
+def fetch_live_diesel_price() -> float:
+    global _cached_diesel_price, _last_fetch_time
+    DEFAULT_DIESEL = 74.03 # Fallback price
     
-def calculate_transfer_cost(distance_km: float):
-    FUEL_PRICE_PHP = 65.00
+    # PERFORMANCE CACHE: Use cached price if fetched within the last hour
+    if _cached_diesel_price and _last_fetch_time and (dt_datetime.now() - _last_fetch_time).total_seconds() < 3600:
+        return _cached_diesel_price
+
+    try:
+        api_url = "https://gaswatchph.com/api/community-prices" 
+        headers = { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
+        response = requests.get(api_url, headers=headers, timeout=5)
+        cutoff_date = dt_datetime.now(dt_timezone.utc) - timedelta(days=7)
+
+        if response.status_code == 200:
+            data = response.json() 
+            stations = data.get("communityPrices", {})
+            diesel_prices = []
+            
+            for station_id, fuels in stations.items():
+                if "diesel" in fuels:
+                    price = fuels["diesel"].get("price")
+                    if price:
+                        clean_price = float(price)
+                        if 50.0 <= clean_price <= 95.0: # Filter out trolls/typos
+                            timestamp_str = fuels["diesel"].get("timestamp")
+                            if timestamp_str:
+                                entry_date = dt_datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+                                if entry_date > cutoff_date:
+                                    diesel_prices.append(clean_price)
+            
+            if diesel_prices:
+                _cached_diesel_price = round(sum(diesel_prices) / len(diesel_prices), 2)
+                _last_fetch_time = dt_datetime.now()
+                return _cached_diesel_price
+                
+        return DEFAULT_DIESEL
+    except Exception as e:
+        print(f"API Fetch failed: {e}. Defaulting to baseline.")
+        return DEFAULT_DIESEL
+
+# --- CLASSMATE'S TRUCK MATH ROUTINE ---
+def calculate_transfer_cost(distance_km: float, quantity_needed: float):
+    FUEL_PRICE_PHP = fetch_live_diesel_price() 
+    
+    TRUCK_CAPACITY = 100.0 # Example: 100 bags/units per truck
+    trips = math.ceil(quantity_needed / TRUCK_CAPACITY)
+    
     TRUCK_KM_PER_LITER = 6.0
     DISPATCH_FEE = 300.00
-    fuel_cost = (distance_km / TRUCK_KM_PER_LITER) * FUEL_PRICE_PHP
-    return round(fuel_cost + DISPATCH_FEE, 2)
+    
+    total_fuel_cost = (distance_km / TRUCK_KM_PER_LITER) * FUEL_PRICE_PHP * trips
+    total_dispatch_fee = DISPATCH_FEE * trips
+    return round(total_fuel_cost + total_dispatch_fee, 2)
 
 def calculate_procurement_cost(unit_price: float, quantity: float, distance_km: float):
     SUPPLIER_DELIVERY_RATE = 25.00
@@ -91,23 +143,14 @@ def calculate_procurement_cost(unit_price: float, quantity: float, distance_km: 
 
 # --- AUTO-STATUS INTELLIGENCE FIX ---
 def get_dynamic_status(quantity: float, baseline: float, current_status: str, is_asset: bool = False) -> str:
-    # 1. Respect explicit manual lifecycle flags (User knows best)
     if current_status in ["Sufficient", "Surplus", "Fully Utilized", "Out of Stock"]: 
         return current_status
-    
-    # 2. Tools/Assets behave differently (they don't get "consumed")
     if is_asset:
         return "In Use" if quantity <= 0 else "Available"
-        
-    # 3. STRICT RULE: If consumables hit 0, it is ALWAYS an emergency (Critical)
     if quantity <= 0: 
         return "Critical"
-    
-    # 4. Low stock triggers at 10%
     if quantity <= (baseline * 0.10): 
         return "Low Stock"
-    
-    # 5. Default healthy state
     return "In Stock"
 
 class CatalogItemOut(BaseModel):
@@ -232,6 +275,7 @@ def get_security_logs(current_user: models.User = Depends(get_current_user), db:
     logs = db.query(models.ActivityLog).filter(models.ActivityLog.user_id == current_user.id, models.ActivityLog.is_security_event == True).order_by(models.ActivityLog.id.desc()).limit(15).all()
     return [{"id": l.id, "user_id": l.user_id, "action": l.action, "timestamp": get_local_time_string(l.timestamp), "is_security_event": l.is_security_event} for l in logs]
 
+
 # --- SITES ---
 @app.get("/sites/", response_model=List[schemas.SiteResponse], tags=["Sites"])
 def list_sites(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
@@ -242,9 +286,10 @@ def create_site(site: schemas.SiteCreate = Body(...), current_user: models.User 
     if current_user.role not in ["admin", "owner"]: raise HTTPException(status_code=403, detail="Unauthorized.")
     new_site = models.ProjectSite(site_name=site.name, address=site.address, latitude=site.lat, longitude=site.lon, manager_id=site.manager_id)
     db.add(new_site)
-    db.add(models.ActivityLog(user_id=current_user.id, action=f"User [{current_user.username}]: Created a new Project Site '{site.name}'.", is_security_event=False))
     db.commit()
     db.refresh(new_site)
+    db.add(models.ActivityLog(user_id=current_user.id, action=f"User [{current_user.username}]: Created a new Project Site '{site.name}'.", site_id=new_site.id, is_security_event=False))
+    db.commit()
     return new_site
 
 @app.patch("/sites/{site_id}", response_model=schemas.SiteResponse, tags=["Sites"])
@@ -256,7 +301,7 @@ def edit_site(site_id: int, name: str = Body(None), address: str = Body(None), m
     if name: site.site_name = name
     if address: site.address = address
     if manager_id is not None: site.manager_id = manager_id
-    db.add(models.ActivityLog(user_id=current_user.id, action=f"User [{current_user.username}]: Modified Project Site settings for '{old_name}' (Site #{site_id}).", is_security_event=False))
+    db.add(models.ActivityLog(user_id=current_user.id, action=f"User [{current_user.username}]: Modified Project Site settings for '{old_name}' (Site #{site_id}).", site_id=site_id, is_security_event=False))
     db.commit()
     db.refresh(site)
     return site
@@ -269,6 +314,7 @@ def update_project_status(site_id: int, req: schemas.ProjectStatusUpdate = Body(
     valid_statuses = ["Pre Construction", "Mid Construction", "Finishing", "Post Construction"]
     if req.stage_status not in valid_statuses: raise HTTPException(status_code=400, detail="Invalid project stage.")
     site.stage_status = req.stage_status
+    db.add(models.ActivityLog(user_id=current_user.id, action=f"Advanced Project Status to {site.stage_status}", site_id=site_id))
     db.commit()
     return {"status": "Success", "message": f"Project status advanced to {site.stage_status}"}
 
@@ -278,7 +324,7 @@ def soft_delete_site(site_id: int, current_user: models.User = Depends(get_curre
     site = db.query(models.ProjectSite).filter(models.ProjectSite.id == site_id).first()
     if not site: raise HTTPException(status_code=404, detail="Site not found")
     site.is_active = False
-    db.add(models.ActivityLog(user_id=current_user.id, action=f"User [{current_user.username}]: SECURITY EVENT - Project Site '{site.site_name}' (Site #{site_id}) was securely archived.", is_security_event=True))
+    db.add(models.ActivityLog(user_id=current_user.id, action=f"User [{current_user.username}]: SECURITY EVENT - Project Site '{site.site_name}' (Site #{site_id}) was securely archived.", site_id=site_id, is_security_event=True))
     db.commit()
     return {"status": "success", "message": "Project Site securely archived."}
 
@@ -293,10 +339,16 @@ def restore_site(site_id: int, current_user: models.User = Depends(get_current_u
     site = db.query(models.ProjectSite).filter(models.ProjectSite.id == site_id).first()
     if not site: raise HTTPException(status_code=404, detail="Site not found")
     site.is_active = True
-    db.add(models.ActivityLog(user_id=current_user.id, action=f"Restored Project Site '{site.site_name}' (Site #{site_id}) from archives."))
+    db.add(models.ActivityLog(user_id=current_user.id, action=f"Restored Project Site '{site.site_name}' (Site #{site_id}) from archives.", site_id=site_id))
     db.commit()
     db.refresh(site)
     return site
+
+@app.get("/sites/{site_id}/audit-logs", response_model=List[schemas.ActivityLogResponse], tags=["Sites"])
+def get_site_audit_logs(site_id: int, db: Session = Depends(get_db)):
+    logs = db.query(models.ActivityLog).filter(models.ActivityLog.site_id == site_id).order_by(models.ActivityLog.id.desc()).limit(50).all()
+    return [{"id": l.id, "user_id": l.user_id, "site_id": l.site_id, "action": l.action, "timestamp": get_local_time_string(l.timestamp), "is_security_event": l.is_security_event} for l in logs]
+
 
 # --- INVENTORY & AUDIT LOGGING ---
 @app.get("/inventory/", response_model=List[schemas.InventoryResponse], tags=["Inventory"])
@@ -319,9 +371,11 @@ def log_stock_transaction(transaction: schemas.InventoryBase = Body(...), curren
 
     action_text = ""
     if item:
+        if transaction.quantity < 0 and item.quantity < abs(transaction.quantity):
+            raise HTTPException(status_code=400, detail=f"Insufficient stock! You only have {item.quantity} {item.unit} available. You cannot deduct {abs(transaction.quantity)}.")
+
         item.quantity += transaction.quantity
         
-        # --- REVERTED AUTO-STATUS INTELLIGENCE ---
         if item.quantity <= 0 and item.status != "Fully Utilized":
             item.status = "Critical"
         elif item.quantity > 0 and item.status in ["Critical", "Out of Stock", "Depleted"]:
@@ -349,7 +403,7 @@ def log_stock_transaction(transaction: schemas.InventoryBase = Body(...), curren
         else: db.add(models.SupplierMaterial(supplier_id=transaction.supplier_id, material_name=norm_item_name, brand=norm_brand, delivery_rating=transaction.batch_rating, stock_level="Available"))
         
     full_msg = f"User [{current_user.username}]: {action_text}"
-    db.add(models.ActivityLog(user_id=current_user.id, action=full_msg))
+    db.add(models.ActivityLog(user_id=current_user.id, action=full_msg, site_id=transaction.site_id))
     db.commit()
     return {"status": "Success", "message": full_msg}
 
@@ -367,7 +421,7 @@ def override_inventory_status(item_id: int, req: schemas.InventoryStatusOverride
     item.status = req.status
     if req.status in ["Fully Utilized", "Out of Stock"]: item.quantity = 0.0 
 
-    db.add(models.ActivityLog(user_id=current_user.id, action=f"Manually flagged {item.item_name} as {req.status}."))
+    db.add(models.ActivityLog(user_id=current_user.id, action=f"Manually flagged {item.item_name} as {req.status}.", site_id=item.site_id))
     db.commit()
     return {"status": "Success", "message": f"Item successfully flagged as {req.status}."}
 
@@ -379,6 +433,8 @@ def bulk_upload_inventory(items: List[schemas.InventoryBase] = Body(...), curren
             if not site or site.manager_id != current_user.id: raise HTTPException(status_code=403, detail=f"SECURITY BLOCK: Unauthorized site ID {item_data.site_id}")
 
     added_count = 0
+    target_site_id = items[0].site_id if items else None
+    
     for item_data in items:
         norm_name = normalize_item_name(item_data.item_name)
         norm_brand = normalize_item_name(item_data.brand)
@@ -402,14 +458,14 @@ def bulk_upload_inventory(items: List[schemas.InventoryBase] = Body(...), curren
         added_count += 1
 
     action_msg = f"User [{current_user.username}]: Bulk received {added_count} items."
-    db.add(models.ActivityLog(user_id=current_user.id, action=action_msg))
+    db.add(models.ActivityLog(user_id=current_user.id, action=action_msg, site_id=target_site_id))
     db.commit()
     return {"status": "Success", "message": action_msg}
 
 @app.get("/inventory/audit-logs/", tags=["Inventory"])
 def get_recent_audit_logs(db: Session = Depends(get_db)):
     logs = db.query(models.ActivityLog).order_by(models.ActivityLog.id.desc()).limit(20).all()
-    return [{"id": l.id, "user_id": l.user_id, "action": l.action, "timestamp": get_local_time_string(l.timestamp)} for l in logs]
+    return [{"id": l.id, "user_id": l.user_id, "site_id": l.site_id, "action": l.action, "timestamp": get_local_time_string(l.timestamp)} for l in logs]
 
 @app.delete("/inventory/{item_id}", tags=["Inventory"])
 def delete_inventory_item(item_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -419,6 +475,7 @@ def delete_inventory_item(item_id: int, current_user: models.User = Depends(get_
     site = db.query(models.ProjectSite).filter(models.ProjectSite.id == db_item.site_id).first()
     if current_user.role == "staff" and (not site or site.manager_id != current_user.id): raise HTTPException(status_code=403, detail="Unauthorized.")
 
+    db.add(models.ActivityLog(user_id=current_user.id, action=f"Deleted item {db_item.item_name} from ledger.", site_id=db_item.site_id))
     db.delete(db_item)
     db.commit()
     return {"status": "success", "message": f"Item {item_id} deleted"}
@@ -443,7 +500,6 @@ def mark_all_notifications_read(current_user: models.User = Depends(get_current_
     db.commit()
     return {"status": "success", "message": "All notifications marked as read."}
 
-
 # --- NEW ERP: MATERIAL REQUEST WORKFLOW ---
 @app.post("/requests/", response_model=schemas.RequestResponse, tags=["Requests"])
 def create_material_request(req: schemas.RequestCreate = Body(...), current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -455,7 +511,52 @@ def create_material_request(req: schemas.RequestCreate = Body(...), current_user
     db.add(new_req)
     db.commit()
     db.refresh(new_req)
+    
+    db.add(models.ActivityLog(user_id=current_user.id, action=f"Submitted a material request for {req.quantity_needed} {req.unit} of {req.item_name}.", site_id=req.site_id))
+    db.commit()
     return new_req
+
+@app.post("/requests/bulk", response_model=List[schemas.RequestResponse], tags=["Requests"])
+def create_bulk_material_requests(requests: List[schemas.RequestCreate] = Body(...), current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if current_user.role in ["admin", "owner"]: raise HTTPException(status_code=403, detail="Admins cannot create requests.")
+    
+    created_requests = []
+    target_site_id = requests[0].site_id if requests else None
+
+    for req in requests:
+        site = db.query(models.ProjectSite).filter(models.ProjectSite.id == req.site_id).first()
+        if not site: continue
+        
+        new_req = models.MaterialRequest(item_name=normalize_item_name(req.item_name), brand=normalize_item_name(req.brand), quantity_needed=req.quantity_needed, unit=req.unit, site_id=req.site_id, inventory_id=req.inventory_id, status="Pending Approval", requested_by_id=current_user.id)
+        db.add(new_req)
+        created_requests.append(new_req)
+    
+    db.commit()
+    for r in created_requests: db.refresh(r)
+    
+    if requests:
+        db.add(models.ActivityLog(user_id=current_user.id, action=f"Submitted a batch of {len(requests)} material requests.", site_id=target_site_id))
+        db.commit()
+    
+    return created_requests
+
+@app.patch("/requests/{req_id}/edit", response_model=schemas.RequestResponse, tags=["Requests"])
+def edit_material_request(req_id: int, req_data: dict = Body(...), current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if current_user.role not in ["admin", "owner"]: raise HTTPException(403, detail="Only Admins can edit requests.")
+    
+    mat_req = db.query(models.MaterialRequest).filter(models.MaterialRequest.id == req_id).first()
+    if not mat_req: raise HTTPException(404, detail="Request not found.")
+
+    old_qty = mat_req.quantity_needed
+    if "quantity_needed" in req_data: mat_req.quantity_needed = float(req_data["quantity_needed"])
+    if "item_name" in req_data: mat_req.item_name = normalize_item_name(req_data["item_name"])
+    if "unit" in req_data: mat_req.unit = req_data["unit"]
+    if "brand" in req_data: mat_req.brand = normalize_item_name(req_data["brand"])
+
+    db.add(models.ActivityLog(user_id=current_user.id, action=f"Admin modified Request #{mat_req.id} (Qty changed from {old_qty} to {mat_req.quantity_needed}).", site_id=mat_req.site_id))
+    db.commit()
+    db.refresh(mat_req)
+    return mat_req
 
 @app.delete("/requests/{req_id}", tags=["Requests"])
 def delete_material_request(req_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -463,12 +564,14 @@ def delete_material_request(req_id: int, current_user: models.User = Depends(get
     req = db.query(models.MaterialRequest).filter(models.MaterialRequest.id == req_id).first()
     if not req: raise HTTPException(status_code=404, detail="Request not found.")
     
-    # --- FIX FOR 500 CORS CRASH ON DELETE ---
-    # Sever ties with any ghost transfers or POs before deleting to avoid Foreign Key Integrity Errors
+    target_site_id = req.site_id
+    
     db.query(models.MaterialTransfer).filter(models.MaterialTransfer.linked_request_id == req_id).update({"linked_request_id": None})
     db.query(models.PurchaseOrder).filter(models.PurchaseOrder.linked_request_id == req_id).update({"linked_request_id": None})
 
     db.delete(req)
+    
+    db.add(models.ActivityLog(user_id=current_user.id, action=f"Admin deleted Material Request #{req_id}.", site_id=target_site_id))
     db.commit()
     return {"status": "Success", "message": "Request permanently deleted."}
 
@@ -482,6 +585,8 @@ def request_restock_from_inventory(inventory_id: int, req: schemas.RequestRestoc
 
     new_req = models.MaterialRequest(item_name=inventory_item.item_name, brand=inventory_item.brand, quantity_needed=req.quantity_needed, unit=inventory_item.unit, site_id=inventory_item.site_id, inventory_id=inventory_item.id, status="Pending Approval", requested_by_id=current_user.id)
     db.add(new_req)
+    
+    db.add(models.ActivityLog(user_id=current_user.id, action=f"Triggered Smart Restock for {req.quantity_needed} {inventory_item.unit} of {inventory_item.item_name}.", site_id=inventory_item.site_id))
     db.commit()
     db.refresh(new_req)
     return new_req
@@ -537,6 +642,8 @@ def initiate_transfer(req: schemas.TransferCreate = Body(...), current_user: mod
             mat_req.status = "Approved & Routing"
             mat_req.fulfillment_method = "Internal Transfer"
             mat_req.approved_by_id = current_user.id
+            
+    db.add(models.ActivityLog(user_id=current_user.id, action=f"Dispatched internal transfer of {req.quantity} {req.unit} of {norm_name}.", site_id=req.source_site_id))
     db.commit()
     return {"status": "Success", "message": "Transfer initiated successfully."}
 
@@ -570,6 +677,7 @@ def receive_transfer(transfer_id: int, current_user: models.User = Depends(get_c
     else:
         db.add(models.Inventory(item_name=norm_name, brand=transfer.brand, quantity=transfer.quantity, baseline_quantity=transfer.quantity, unit=transfer.unit, status="Available" if is_asset else "In Stock", fsn_status="FAST", site_id=transfer.destination_site_id))
 
+    db.add(models.ActivityLog(user_id=current_user.id, action=f"Received internal transfer of {transfer.quantity} {transfer.unit} of {norm_name}.", site_id=transfer.destination_site_id))
     db.commit()
     return {"status": "Success", "message": "Transfer received successfully. Inventory synced."}
 
@@ -581,7 +689,6 @@ def cancel_transfer(transfer_id: int, current_user: models.User = Depends(get_cu
         
     transfer.status = "CANCELLED"
     
-    # 1. Refund the inventory to the Source Site
     source_item = db.query(models.Inventory).filter(models.Inventory.site_id == transfer.source_site_id, models.Inventory.item_name == transfer.item_name).first()
     is_asset = source_item.unit in ["Unit", "Set"] if source_item else False
 
@@ -590,7 +697,6 @@ def cancel_transfer(transfer_id: int, current_user: models.User = Depends(get_cu
         source_item.baseline_quantity = source_item.quantity 
         source_item.status = get_dynamic_status(source_item.quantity, source_item.baseline_quantity, source_item.status, is_asset)
 
-    # 2. THE FIX: Rewind the linked Material Request
     if transfer.linked_request_id:
         mat_req = db.query(models.MaterialRequest).filter(models.MaterialRequest.id == transfer.linked_request_id).first()
         if mat_req:
@@ -608,6 +714,7 @@ def cancel_transfer(transfer_id: int, current_user: models.User = Depends(get_cu
     db.add(models.ActivityLog(
         user_id=current_user.id, 
         action=f"User [{current_user.username}]: REJECTED/CANCELLED Transfer #{transfer.id} for {transfer.item_name}. Stock refunded to source.",
+        site_id=transfer.source_site_id,
         is_security_event=True
     ))
 
@@ -704,6 +811,8 @@ def create_purchase_order(req: schemas.PurchaseOrderCreate = Body(...), current_
         if mat_req:
             mat_req.status = "Approved & Routing"
             mat_req.fulfillment_method = "External Purchase"
+            
+    db.add(models.ActivityLog(user_id=current_user.id, action=f"Drafted Purchase Order to Supplier ID #{req.supplier_id} for {req.quantity} {req.material_name}.", site_id=req.site_id))
     db.commit()
     return {"status": "Success"}
 
@@ -732,6 +841,7 @@ def receive_po(po_id: int, rating: int = Body(0, embed=True), current_user: mode
     else:
         db.add(models.Inventory(site_id=po.site_id, item_name=po.material_name, brand="Generic/No Brand", quantity=po.quantity, baseline_quantity=po.quantity, unit="Pcs", status="In Stock", fsn_status="FAST"))
         
+    db.add(models.ActivityLog(user_id=current_user.id, action=f"Received external Purchase Order #{po.id} for {po.quantity} {po.material_name}.", site_id=po.site_id))
     db.commit()
     return {"status": "Success"}
 
@@ -742,7 +852,6 @@ def cancel_po(po_id: int, current_user: models.User = Depends(get_current_user),
     
     po.status = "Cancelled"
     
-    # 1. Refund the stock back to the supplier's catalog
     sup_mat = db.query(models.SupplierMaterial).filter(
         models.SupplierMaterial.supplier_id == po.supplier_id, 
         models.SupplierMaterial.material_name == po.material_name
@@ -753,7 +862,6 @@ def cancel_po(po_id: int, current_user: models.User = Depends(get_current_user),
         if sup_mat.stock_level == "Out of Stock" and sup_mat.quantity > 0:
             sup_mat.stock_level = "Available"
             
-    # 2. THE FIX: Rewind the linked Material Request
     if po.linked_request_id:
         mat_req = db.query(models.MaterialRequest).filter(models.MaterialRequest.id == po.linked_request_id).first()
         if mat_req:
@@ -771,6 +879,7 @@ def cancel_po(po_id: int, current_user: models.User = Depends(get_current_user),
     db.add(models.ActivityLog(
         user_id=current_user.id, 
         action=f"User [{current_user.username}]: CANCELLED Purchase Order #{po.id} for {po.material_name}. Request reverted.",
+        site_id=po.site_id,
         is_security_event=True
     ))
 
@@ -782,7 +891,6 @@ def list_purchase_orders(current_user: models.User = Depends(get_current_user), 
     if current_user.role in ["admin", "owner"]: return db.query(models.PurchaseOrder).order_by(models.PurchaseOrder.id.desc()).all()
     managed_sites = [s.id for s in db.query(models.ProjectSite).filter(models.ProjectSite.manager_id == current_user.id).all()]
     return db.query(models.PurchaseOrder).filter(models.PurchaseOrder.site_id.in_(managed_sites)).order_by(models.PurchaseOrder.id.desc()).all()
-
 
 # --- SELLER PORTAL ---
 def ensure_supplier_profile(user, db: Session):
@@ -854,9 +962,7 @@ def update_order_status(order_id: int, status: str = Body(..., embed=True), curr
     old_status = order.status
     order.status = status
     
-    # --- THE FIX: Rewind Request & Refund Stock if Seller Rejects/Cancels ---
     if status in ["Rejected", "Cancelled"] and old_status not in ["Rejected", "Cancelled"]:
-        # 1. Refund the stock to the seller's catalog
         sup_mat = db.query(models.SupplierMaterial).filter(
             models.SupplierMaterial.supplier_id == sup_id, 
             models.SupplierMaterial.material_name == order.material_name
@@ -867,7 +973,6 @@ def update_order_status(order_id: int, status: str = Body(..., embed=True), curr
             if sup_mat.stock_level == "Out of Stock" and sup_mat.quantity > 0:
                 sup_mat.stock_level = "Available"
                 
-        # 2. Rewind the linked Material Request
         if order.linked_request_id:
             mat_req = db.query(models.MaterialRequest).filter(models.MaterialRequest.id == order.linked_request_id).first()
             if mat_req:
@@ -885,6 +990,7 @@ def update_order_status(order_id: int, status: str = Body(..., embed=True), curr
         db.add(models.ActivityLog(
             user_id=current_user.id, 
             action=f"Supplier [{current_user.username}]: REJECTED/CANCELLED Order #{order.id} for {order.material_name}.",
+            site_id=order.site_id,
             is_security_event=True
         ))
 
@@ -899,25 +1005,37 @@ def get_smart_restock_options(site_id: int, item_name: str, quantity_needed: flo
     norm_name = normalize_item_name(item_name)
     options = []
 
-    surplus_items = db.query(models.Inventory).filter(models.Inventory.item_name == norm_name, models.Inventory.status == "Surplus", models.Inventory.site_id != site_id).all()
+    surplus_items = db.query(models.Inventory).filter(
+        models.Inventory.item_name.ilike(f"%{norm_name}%"), 
+        models.Inventory.status == "Surplus", 
+        models.Inventory.site_id != site_id
+    ).all()
+    
     for item in surplus_items:
         if item.quantity < quantity_needed: continue
         source_site = db.query(models.ProjectSite).filter(models.ProjectSite.id == item.site_id).first()
         dist = compute_distance(target_site.latitude, target_site.longitude, source_site.latitude, source_site.longitude)
-        est_cost = calculate_transfer_cost(dist) 
+        
+        # --- FIXED AI ROUTING CALL ---
+        est_cost = calculate_transfer_cost(dist, quantity_needed) 
+        
         options.append({ 
             "type": "INTERNAL_TRANSFER", 
             "source_name": source_site.site_name, 
             "source_id": source_site.id, 
             "distance_km": round(dist, 2), 
-            "estimated_total_cost": est_cost,
+            "estimated_total_cost": est_cost, 
             "available_stock": item.quantity,
             "unit_price": 0.0,
             "unit": item.unit,
             "recommendation_reason": f"Surplus available. Logistics cost: ₱{est_cost:,.2f}" 
         })
 
-    external_materials = db.query(models.SupplierMaterial).filter(models.SupplierMaterial.material_name == norm_name, models.SupplierMaterial.quantity >= quantity_needed).all()
+    external_materials = db.query(models.SupplierMaterial).filter(
+        models.SupplierMaterial.material_name.ilike(f"%{norm_name}%"), 
+        models.SupplierMaterial.quantity >= quantity_needed
+    ).all()
+    
     for mat in external_materials:
         supplier = db.query(models.Supplier).filter(models.Supplier.id == mat.supplier_id).first()
         if not supplier: continue
@@ -928,7 +1046,7 @@ def get_smart_restock_options(site_id: int, item_name: str, quantity_needed: flo
             "source_name": supplier.name, 
             "source_id": supplier.id, 
             "distance_km": round(dist, 2), 
-            "estimated_total_cost": est_cost,
+            "estimated_total_cost": est_cost, 
             "available_stock": mat.quantity,
             "unit_price": mat.price,
             "unit": mat.unit,

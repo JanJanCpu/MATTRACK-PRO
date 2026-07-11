@@ -55,10 +55,13 @@ export function Inventory() {
 
   const [showRequestModal, setShowRequestModal] = useState(false); const [requestItem, setRequestItem] = useState<InventoryWithCategory | null>(null); const [requestQty, setRequestQty] = useState<number>(1);
   const [itemType, setItemType] = useState<"consumable" | "asset">("consumable");
-  const [newItem, setNewItem] = useState<{ item_name: string; brand: string; quantity: number | ""; unit: string; status: string; fsn_status: string; site_id: string; }>({ item_name: "", brand: "Generic/No Brand", quantity: "", unit: "Bags", status: "In Stock", fsn_status: "FAST", site_id: "", });
+  const [newItem, setNewItem] = useState<{ item_name: string; brand: string; quantity: number | ""; unit: string; status: string; fsn_status: string; site_id: string; }>({ item_name: "", brand: "", quantity: "", unit: "Bags", status: "In Stock", fsn_status: "FAST", site_id: "", });
 
   const [showRestockModal, setShowRestockModal] = useState(false); const [restockItem, setRestockItem] = useState<InventoryWithCategory | null>(null); const [restockOptions, setRestockOptions] = useState<any[]>([]); const [isRestockLoading, setIsRestockLoading] = useState(false); const [hasScanned, setHasScanned] = useState(false); const [restockQty, setRestockQty] = useState<number>(0);
   const [receivingPO, setReceivingPO] = useState<any | null>(null); const [poRating, setPoRating] = useState<number>(0);
+
+  // --- NEW UX FEATURE: Extract Historic Brands for Autosuggest Memory ---
+  const historicBrands = Array.from(new Set(inventoryData.map(i => i.brand).filter(b => b && b.trim() !== "" && b !== "Generic/No Brand")));
 
   const handleSmartCatalogSelect = (selectedName: string) => { const match = MASTER_CATALOG.find(c => c.name === selectedName); if (match) setNewItem(prev => ({ ...prev, item_name: match.name, brand: match.brand, unit: match.unit })); else setNewItem(prev => ({ ...prev, item_name: selectedName })); };
 
@@ -104,7 +107,7 @@ export function Inventory() {
   const submitReceivePO = async (e: React.FormEvent) => { e.preventDefault(); if (!receivingPO) return; if (poRating === 0) return alert("Please provide a delivery rating before confirming."); try { await purchaseOrdersAPI.receive(receivingPO.id, poRating); alert("✅ External PO Shipment Received! Supplier rating recorded."); setReceivingPO(null); setPoRating(0); fetchData(); window.dispatchEvent(new Event("inventoryUpdated")); } catch (err: any) { alert(err.message || "Network error. Could not mark shipment as received."); } };
   const handleCancelPO = async (poId: number) => { if (!window.confirm("Are you sure you want to cancel this pending purchase order?")) return; try { await purchaseOrdersAPI.cancel(poId); alert("❌ Purchase Order successfully cancelled."); fetchData(); } catch (err: any) { alert(err.message || "Network error. Could not cancel PO."); } };
 
-  const handleAddInventory = async (e: React.FormEvent) => { e.preventDefault(); if (newItem.quantity === "") return alert("Please specify physical item count."); try { await inventoryAPI.logTransaction({ item_name: newItem.item_name.trim(), brand: newItem.brand.trim(), quantity: Number(newItem.quantity), unit: newItem.unit, status: newItem.status, fsn_status: newItem.fsn_status, site_id: Number(newItem.site_id), }); setShowAddForm(false); setNewItem({ item_name: "", brand: "Generic/No Brand", quantity: "", unit: "Bags", status: "In Stock", fsn_status: "FAST", site_id: siteFilter ? String(siteFilter) : "" }); fetchData(); window.dispatchEvent(new Event("inventoryUpdated")); } catch (err) { alert("Failed to register baseline item to the ledger."); } };
+  const handleAddInventory = async (e: React.FormEvent) => { e.preventDefault(); if (newItem.quantity === "") return alert("Please specify physical item count."); try { await inventoryAPI.logTransaction({ item_name: newItem.item_name.trim(), brand: newItem.brand.trim() || "Generic/No Brand", quantity: Number(newItem.quantity), unit: newItem.unit.trim(), status: newItem.status, fsn_status: newItem.fsn_status, site_id: Number(newItem.site_id), }); setShowAddForm(false); setNewItem({ item_name: "", brand: "", quantity: "", unit: "Bags", status: "In Stock", fsn_status: "FAST", site_id: siteFilter ? String(siteFilter) : "" }); fetchData(); window.dispatchEvent(new Event("inventoryUpdated")); } catch (err) { alert("Failed to register baseline item to the ledger."); } };
 
   const handleOverrideStatus = async (status: string) => { if (!activeTransactionItem) return; try { await inventoryAPI.overrideStatus(activeTransactionItem.id, status); setModalType(null); fetchData(); window.dispatchEvent(new Event("inventoryUpdated")); alert(`Item status successfully updated to ${status}.`); } catch (err: any) { alert("Failed to update status: " + err.message); } };
 
@@ -177,12 +180,43 @@ export function Inventory() {
                 <div className="flex gap-2"><button onClick={() => setItemType("consumable")} className={`px-4 py-2 rounded-lg font-bold text-sm border-2 ${itemType === "consumable" ? "border-emerald-600 bg-emerald-50 text-emerald-800" : "border-transparent text-neutral-500 hover:bg-neutral-50"}`}>Materials & Consumables</button><button onClick={() => setItemType("asset")} className={`px-4 py-2 rounded-lg font-bold text-sm border-2 ${itemType === "asset" ? "border-emerald-600 bg-emerald-50 text-emerald-800" : "border-transparent text-neutral-500 hover:bg-neutral-50"}`}>Tools & Assets</button></div>
               </div>
               <form onSubmit={handleAddInventory} className="grid grid-cols-1 md:grid-cols-5 gap-4 items-end">
-                <div><label className="block text-xs font-bold text-neutral-500 mb-1">Project Site</label><select className="w-full p-2 border rounded-lg text-sm bg-white focus:ring-2 focus:ring-emerald-500 outline-none font-medium" value={newItem.site_id} onChange={(e) => setNewItem({ ...newItem, site_id: e.target.value })} required><option value="">Select Managed Site...</option>{editableSites.map((s) => (<option key={s.id} value={s.id}>{s.site_name}</option>))}</select></div>
-                <div><label className="block text-xs font-bold text-neutral-500 mb-1">{itemType === "consumable" ? "Master Item Name" : "Tool Name"}</label><input type="text" list="catalog-items" className="w-full p-2 border rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none font-medium" placeholder="Search master catalog..." value={newItem.item_name} onChange={(e) => handleSmartCatalogSelect(e.target.value)} required /><datalist id="catalog-items">{MASTER_CATALOG.map(c => <option key={c.sku} value={c.name}>{c.sku}: {c.brand}</option>)}</datalist></div>
-                <div><label className="block text-xs font-bold text-neutral-500 mb-1">Brand/Spec</label><input type="text" className="w-full p-2 border rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none" placeholder="e.g. Republic" value={newItem.brand} onChange={(e) => setNewItem({ ...newItem, brand: e.target.value })} /></div>
+                <div>
+                  <label className="block text-xs font-bold text-neutral-500 mb-1">Project Site</label>
+                  <select className="w-full p-2 border rounded-lg text-sm bg-white focus:ring-2 focus:ring-emerald-500 outline-none font-medium" value={newItem.site_id} onChange={(e) => setNewItem({ ...newItem, site_id: e.target.value })} required>
+                    <option value="">Select Managed Site...</option>
+                    {editableSites.map((s) => (<option key={s.id} value={s.id}>{s.site_name}</option>))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-neutral-500 mb-1">{itemType === "consumable" ? "Master Item Name" : "Tool Name"}</label>
+                  <input type="text" list="catalog-items" className="w-full p-2 border rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none font-medium" placeholder="Search master catalog..." value={newItem.item_name} onChange={(e) => handleSmartCatalogSelect(e.target.value)} required />
+                  <datalist id="catalog-items">{MASTER_CATALOG.map(c => <option key={c.sku} value={c.name}>{c.sku}: {c.brand}</option>)}</datalist>
+                </div>
+                {/* --- NEW UX FEATURE: Autosuggest Brand Input --- */}
+                <div>
+                  <label className="block text-xs font-bold text-neutral-500 mb-1">Brand/Spec</label>
+                  <input type="text" list="historic-brands" className="w-full p-2 border rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none" placeholder="e.g. Republic (Optional)" value={newItem.brand} onChange={(e) => setNewItem({ ...newItem, brand: e.target.value })} />
+                  <datalist id="historic-brands">
+                    {historicBrands.map(b => <option key={b} value={b} />)}
+                  </datalist>
+                </div>
                 <div className="grid grid-cols-2 gap-2">
-                  <div><label className="block text-xs font-bold text-neutral-500 mb-1">Quantity (100%)</label><input type="number" placeholder="0" className="w-full p-2 border rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none font-bold" value={newItem.quantity} onChange={(e) => setNewItem({ ...newItem, quantity: e.target.value === "" ? "" : Number(e.target.value) })} required /></div>
-                  <div><label className="block text-xs font-bold text-neutral-500 mb-1">Unit</label><select className="w-full p-2 border rounded-lg text-sm bg-white focus:ring-2 focus:ring-emerald-500 outline-none font-medium" value={newItem.unit} onChange={(e) => setNewItem({ ...newItem, unit: e.target.value })}>{itemType === "consumable" ? (<><option value="Bags">Bags</option><option value="Pcs">Pcs</option><option value="Kilos">Kilos</option><option value="Linear Ft">Linear Ft</option><option value="Cu.m">Cu.m</option></>) : (<><option value="Unit">Unit</option><option value="Set">Set</option></>)}</select></div>
+                  <div>
+                    <label className="block text-xs font-bold text-neutral-500 mb-1">Quantity (100%)</label>
+                    <input type="number" placeholder="0" className="w-full p-2 border rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none font-bold" value={newItem.quantity} onChange={(e) => setNewItem({ ...newItem, quantity: e.target.value === "" ? "" : Number(e.target.value) })} required />
+                  </div>
+                  {/* --- NEW UX FEATURE: Custom Unit Combo Box --- */}
+                  <div>
+                    <label className="block text-xs font-bold text-neutral-500 mb-1">Unit</label>
+                    <input type="text" list="unit-options" className="w-full p-2 border rounded-lg text-sm bg-white focus:ring-2 focus:ring-emerald-500 outline-none font-medium" value={newItem.unit} onChange={(e) => setNewItem({ ...newItem, unit: e.target.value })} placeholder="e.g. Bags" required />
+                    <datalist id="unit-options">
+                      {itemType === "consumable" ? (
+                        <><option value="Bags"/><option value="Pcs"/><option value="Kilos"/><option value="Linear Ft"/><option value="Cu.m"/></>
+                      ) : (
+                        <><option value="Unit"/><option value="Set"/></>
+                      )}
+                    </datalist>
+                  </div>
                 </div>
                 <button type="submit" className="bg-slate-900 text-white py-2 rounded-lg font-bold hover:bg-slate-800 transition-colors w-full h-full max-h-[38px] flex items-center justify-center">Register Baseline</button>
               </form>

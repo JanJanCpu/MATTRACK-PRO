@@ -11,8 +11,9 @@ interface BulkImportWizardProps {
   onCancel: () => void;
 }
 
-const REQUIRED_FIELDS = ['item_name', 'quantity', 'unit', 'site_id'];
-const OPTIONAL_FIELDS = ['brand', 'supplier_id', 'batch_rating'];
+// --- NEW UX FEATURE: Stripped down to only the absolute essentials ---
+const REQUIRED_FIELDS = ['item_name', 'quantity', 'unit'];
+const OPTIONAL_FIELDS = ['brand'];
 
 export function BulkImportWizard({ sitesList, suppliersList, onComplete, onCancel }: BulkImportWizardProps) {
   const [step, setStep] = useState<1 | 2 | 3>(1);
@@ -21,21 +22,24 @@ export function BulkImportWizard({ sitesList, suppliersList, onComplete, onCance
   const [mapping, setMapping] = useState<Record<string, string>>({});
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  
+  // --- NEW UX FEATURE: Global Site Selector for the entire batch ---
+  const [selectedSiteId, setSelectedSiteId] = useState<string>("");
 
-  // --- FIXED: Download Standard Template Function ---
   const handleDownloadTemplate = (e: React.MouseEvent) => {
-    e.preventDefault(); // Stop React Router from intercepting the link
-    e.stopPropagation(); // Stop event from bubbling up
+    e.preventDefault(); 
+    e.stopPropagation(); 
 
+    // Template is now incredibly simple for the encoder!
     const templateHeaders = [...REQUIRED_FIELDS, ...OPTIONAL_FIELDS].join(',');
-    const sampleRow = 'Portland Cement,100,Bags,1,Republic,2,4.5';
+    const sampleRow = 'Portland Cement,100,Bags,Republic';
     const csvContent = "data:text/csv;charset=utf-8," + templateHeaders + "\n" + sampleRow;
     
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
     link.setAttribute("href", encodedUri);
     link.setAttribute("download", "MatTrack_Import_Template.csv");
-    link.setAttribute("target", "_blank"); // Force the browser to handle the download directly
+    link.setAttribute("target", "_blank"); 
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -89,29 +93,26 @@ export function BulkImportWizard({ sitesList, suppliersList, onComplete, onCance
 
   const handleProcessImport = async () => {
     if (!validateMapping()) return;
+    if (!selectedSiteId) {
+      setError("Please go back and select a Target Project Site.");
+      return;
+    }
+    
     setStep(3);
     setUploading(true);
 
     try {
       const formattedData = parsedData.map(row => {
-        const item: any = {
+        return {
           item_name: row[mapping.item_name],
           brand: mapping.brand && row[mapping.brand] ? row[mapping.brand] : "Generic/No Brand",
           quantity: parseFloat(row[mapping.quantity]) || 0,
-          unit: row[mapping.unit],
+          unit: row[mapping.unit] || "Pcs",
           status: "Healthy", 
           fsn_status: "FAST", 
-          site_id: parseInt(row[mapping.site_id], 10),
+          // Inject the single UI-selected site ID into every row
+          site_id: parseInt(selectedSiteId, 10),
         };
-
-        if (mapping.supplier_id && row[mapping.supplier_id]) {
-          item.supplier_id = parseInt(row[mapping.supplier_id], 10);
-        }
-        if (mapping.batch_rating && row[mapping.batch_rating]) {
-          item.batch_rating = parseFloat(row[mapping.batch_rating]);
-        }
-
-        return item;
       });
 
       const validData = formattedData.filter(i => i.item_name && i.quantity > 0 && !isNaN(i.site_id));
@@ -152,7 +153,20 @@ export function BulkImportWizard({ sitesList, suppliersList, onComplete, onCance
       {/* STEP 1: UPLOAD */}
       {step === 1 && (
         <div className="space-y-6">
-          {/* --- NEW: DOWNLOAD TEMPLATE SECTION --- */}
+          
+          {/* --- NEW UX FEATURE: Ask for Target Site first! --- */}
+          <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-100">
+            <label className="block text-sm font-bold text-emerald-900 mb-2">1. Select Target Project Site</label>
+            <select 
+              value={selectedSiteId} 
+              onChange={e => setSelectedSiteId(e.target.value)}
+              className="w-full p-2.5 border border-emerald-200 rounded-lg outline-none focus:ring-2 focus:ring-emerald-600 bg-white text-slate-700 font-medium shadow-sm"
+            >
+              <option value="">-- Choose Site for this Batch Import --</option>
+              {sitesList.map(s => <option key={s.id} value={s.id}>{s.site_name}</option>)}
+            </select>
+          </div>
+
           <div className="flex items-center justify-between p-4 bg-slate-50 border border-slate-200 rounded-xl">
             <div className="flex items-center gap-3">
               <div className="p-2 bg-slate-200 text-slate-700 rounded-lg">
@@ -160,7 +174,7 @@ export function BulkImportWizard({ sitesList, suppliersList, onComplete, onCance
               </div>
               <div>
                 <h3 className="font-bold text-slate-800 text-sm">Need the exact format?</h3>
-                <p className="text-xs text-slate-500">Download our standard CSV template to guarantee a perfect import.</p>
+                <p className="text-xs text-slate-500">Download our simplified standard CSV template.</p>
               </div>
             </div>
             <button 
@@ -171,15 +185,18 @@ export function BulkImportWizard({ sitesList, suppliersList, onComplete, onCance
             </button>
           </div>
 
-          <div className="border-2 border-dashed border-neutral-300 rounded-xl p-12 text-center hover:border-emerald-500 hover:bg-emerald-50/50 transition-colors relative group">
+          <div className={`border-2 border-dashed rounded-xl p-12 text-center transition-colors relative group ${selectedSiteId ? "border-emerald-300 hover:border-emerald-500 hover:bg-emerald-50/50" : "border-neutral-200 bg-neutral-50 opacity-60"}`}>
             <input 
               type="file" 
               accept=".csv"
               onChange={handleFileUpload}
-              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+              disabled={!selectedSiteId}
+              className={`absolute inset-0 w-full h-full opacity-0 ${selectedSiteId ? "cursor-pointer" : "cursor-not-allowed"}`}
             />
-            <Upload className="w-10 h-10 text-emerald-500 mx-auto mb-4 group-hover:scale-110 transition-transform" />
-            <h3 className="text-base font-bold text-neutral-900 mb-1">Click or drag CSV file to upload</h3>
+            <Upload className={`w-10 h-10 mx-auto mb-4 ${selectedSiteId ? "text-emerald-500 group-hover:scale-110 transition-transform" : "text-neutral-400"}`} />
+            <h3 className="text-base font-bold text-neutral-900 mb-1">
+              {selectedSiteId ? "Click or drag CSV file to upload" : "Select a site above first"}
+            </h3>
             <p className="text-sm text-neutral-500">Only .csv files are supported. Max size 5MB.</p>
           </div>
         </div>

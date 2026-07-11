@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { 
   Building2, MapPin, Search, Plus, Loader, HardHat, 
   Settings2, Archive, AlertTriangle, X, Pencil, Map as MapIcon, RefreshCw,
-  ChevronDown
+  ChevronDown, Activity
 } from "lucide-react";
 import { createPortal } from "react-dom";
 
@@ -20,37 +20,21 @@ import "leaflet/dist/leaflet.css";
 
 import { geocodeAddress, sitesAPI } from "../../services/apiService"; 
 
-// --- Leaflet Icon Fix ---
 const defaultIcon = new L.Icon({
-  iconUrl:
-    "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png",
-  shadowUrl:
-    "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
+  iconUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png",
+  shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
   iconSize: [25, 41],
   iconAnchor: [12, 41],
 });
 
-// --- Map Helper Components ---
-function MapPinPicker({
-  position,
-  setPosition,
-}: {
-  position: [number, number];
-  setPosition: (pos: [number, number]) => void;
-}) {
-  useMapEvents({
-    click(e) {
-      setPosition([e.latlng.lat, e.latlng.lng]);
-    },
-  });
+function MapPinPicker({ position, setPosition }: { position: [number, number]; setPosition: (pos: [number, number]) => void; }) {
+  useMapEvents({ click(e) { setPosition([e.latlng.lat, e.latlng.lng]); } });
   return <Marker position={position} icon={defaultIcon} />;
 }
 
 function MapUpdater({ position }: { position: [number, number] }) {
   const map = useMap();
-  useEffect(() => {
-    map.flyTo(position, 15, { animate: true, duration: 1.5 });
-  }, [position, map]);
+  useEffect(() => { map.flyTo(position, 15, { animate: true, duration: 1.5 }); }, [position, map]);
   return null;
 }
 
@@ -68,17 +52,20 @@ export function Projects() {
   const [userRole, setUserRole] = useState("staff");
   const [currentUserId, setCurrentUserId] = useState<number | null>(null);
   
-  // --- Ledger View Mode State ---
   const [viewMode, setViewMode] = useState<"active" | "archived">("active");
   
-  // --- Modals State ---
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingSite, setEditingSite] = useState<any>(null);
   
   const [showArchiveModal, setShowArchiveModal] = useState(false);
   const [archivingSite, setArchivingSite] = useState<any>(null);
 
-  // --- Add Site & Staff State ---
+  // --- NEW ERP FIX: SITE-SPECIFIC AUDIT LOG STATE ---
+  const [showAuditModal, setShowAuditModal] = useState(false);
+  const [siteAuditLogs, setSiteAuditLogs] = useState<any[]>([]);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditSiteContext, setAuditSiteContext] = useState<any>(null);
+
   const [showAddForm, setShowAddForm] = useState(false);
   const [newSite, setNewSite] = useState({ name: "", address: "", manager_id: "", lat: 14.5995, lon: 120.9842 });
   const [staffList, setStaffList] = useState<any[]>([]);
@@ -98,8 +85,7 @@ export function Projects() {
       });
       
       if (response.ok) {
-        const data = await response.json();
-        setSites(data);
+        setSites(await response.json());
       }
     } catch (error) {
       console.error("Failed to fetch sites:", error);
@@ -138,7 +124,6 @@ export function Projects() {
     fetchStaff();
   }, [viewMode]); 
 
-  // --- Smart Address Search ---
   const handleAddressSearch = async (e: React.MouseEvent) => {
     e.preventDefault();
     if (!newSite.address.trim()) return;
@@ -153,7 +138,6 @@ export function Projects() {
     setIsSearching(false);
   };
 
-  // --- Submit Handler ---
   const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
@@ -164,6 +148,7 @@ export function Projects() {
         address: newSite.address,
         lat: newSite.lat,
         lon: newSite.lon,
+        // --- NEW ERP FIX: Ensure explicitly handling Unassigned ---
         manager_id: newSite.manager_id ? parseInt(newSite.manager_id) : undefined
       });
       
@@ -192,7 +177,9 @@ export function Projects() {
         },
         body: JSON.stringify({
           name: editingSite.site_name,
-          address: editingSite.address
+          address: editingSite.address,
+          // Allow changing the assigned manager
+          manager_id: editingSite.manager_id ? parseInt(editingSite.manager_id) : undefined
         })
       });
 
@@ -256,6 +243,21 @@ export function Projects() {
     }
   };
 
+  // --- FETCH SPECIFIC AUDIT LOGS ---
+  const handleViewAuditLogs = async (site: any) => {
+    setAuditSiteContext(site);
+    setShowAuditModal(true);
+    setAuditLoading(true);
+    try {
+      const logs = await sitesAPI.getAuditLogs(site.id);
+      setSiteAuditLogs(logs);
+    } catch (e) {
+      alert("Failed to load audit logs for this site.");
+    } finally {
+      setAuditLoading(false);
+    }
+  };
+
   const filteredSites = sites.filter(s => 
     s.site_name.toLowerCase().includes(searchQuery.toLowerCase()) || 
     s.address?.toLowerCase().includes(searchQuery.toLowerCase())
@@ -264,7 +266,6 @@ export function Projects() {
   return (
     <div className="max-w-6xl mx-auto space-y-6 animate-in fade-in duration-500">
       
-      {/* Header Area */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
@@ -310,17 +311,13 @@ export function Projects() {
               onClick={() => setShowAddForm(!showAddForm)}
               className="px-4 py-2 bg-slate-900 text-white rounded-lg font-medium flex items-center gap-2 hover:bg-slate-800 transition-all shadow-sm"
             >
-              {showAddForm ? (
-                "Cancel"
-              ) : (
-                <><Plus className="w-4 h-4" /> Add New Site</>
-              )}
+              {showAddForm ? "Cancel" : <><Plus className="w-4 h-4" /> Add New Site</>}
             </button>
           )}
         </div>
       </div>
 
-      {/* --- INLINE ADD NEW SITE FORM --- */}
+      {/* --- ADD NEW SITE FORM --- */}
       {showAddForm && ["admin", "owner"].includes(userRole) && (
         <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm animate-in slide-in-from-top-4">
           <form onSubmit={handleAddSubmit} className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
@@ -343,7 +340,8 @@ export function Projects() {
                 onChange={e => setNewSite({...newSite, manager_id: e.target.value})}
                 className="w-full p-2 border rounded-lg text-sm bg-slate-50 focus:ring-2 focus:ring-emerald-600 outline-none font-medium text-slate-700"
               >
-                <option value="">Select a manager (Optional)</option>
+                {/* --- NEW ERP FIX: Unassigned Selection --- */}
+                <option value="">-- Unassigned / TBD --</option>
                 {staffList.map(staff => (
                   <option key={staff.id} value={staff.id}>
                     {staff.username} {staff.company_name ? `(${staff.company_name})` : ""}
@@ -373,7 +371,6 @@ export function Projects() {
               </div>
             </div>
 
-            {/* --- INTERACTIVE MAP PREVIEW --- */}
             <div className="md:col-span-4 mb-2 mt-2">
               <div className="flex items-center justify-between mb-1">
                 <label className="block text-xs font-bold text-slate-500 uppercase">
@@ -384,30 +381,16 @@ export function Projects() {
                 </span>
               </div>
               <div className="h-[200px] w-full rounded-lg overflow-hidden border border-slate-200 relative z-0">
-                <MapContainer
-                  center={[newSite.lat, newSite.lon]}
-                  zoom={13}
-                  className="w-full h-full"
-                >
+                <MapContainer center={[newSite.lat, newSite.lon]} zoom={13} className="w-full h-full">
                   <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-                  <MapPinPicker 
-                    position={[newSite.lat, newSite.lon]} 
-                    setPosition={(pos) => setNewSite({...newSite, lat: pos[0], lon: pos[1]})} 
-                  />
+                  <MapPinPicker position={[newSite.lat, newSite.lon]} setPosition={(pos) => setNewSite({...newSite, lat: pos[0], lon: pos[1]})} />
                   <MapUpdater position={[newSite.lat, newSite.lon]} />
                 </MapContainer>
               </div>
-              <p className="text-xs text-slate-400 mt-2 flex items-center gap-1 font-medium">
-                <MapPin className="w-3 h-3 text-emerald-600" /> Tip: Click the map to manually adjust the exact pin location for unmapped sites.
-              </p>
             </div>
 
             <div className="md:col-span-4 flex justify-end gap-3 mt-2">
-              <button 
-                type="submit" 
-                disabled={isSubmitting} 
-                className="bg-slate-900 text-white px-6 py-2.5 rounded-lg font-bold hover:bg-slate-800 transition-colors disabled:opacity-70 disabled:cursor-not-allowed w-full shadow-sm"
-              >
+              <button type="submit" disabled={isSubmitting} className="bg-slate-900 text-white px-6 py-2.5 rounded-lg font-bold hover:bg-slate-800 transition-colors disabled:opacity-70 disabled:cursor-not-allowed w-full shadow-sm">
                 {isSubmitting ? "Processing..." : "Confirm Location & Create Site"}
               </button>
             </div>
@@ -428,17 +411,9 @@ export function Projects() {
           </thead>
           <tbody className="divide-y divide-slate-100">
             {loading ? (
-              <tr>
-                <td colSpan={4} className="py-12 text-center text-slate-400">
-                  <Loader className="w-6 h-6 animate-spin mx-auto mb-2" /> Loading ledger...
-                </td>
-              </tr>
+              <tr><td colSpan={4} className="py-12 text-center text-slate-400"><Loader className="w-6 h-6 animate-spin mx-auto mb-2" /> Loading ledger...</td></tr>
             ) : filteredSites.length === 0 ? (
-              <tr>
-                <td colSpan={4} className="py-12 text-center text-slate-400 font-medium">
-                  {viewMode === "active" ? "No active project sites found." : "No archived project sites found."}
-                </td>
-              </tr>
+              <tr><td colSpan={4} className="py-12 text-center text-slate-400 font-medium">{viewMode === "active" ? "No active project sites found." : "No archived project sites found."}</td></tr>
             ) : (
               filteredSites.map((site) => {
                 const isManager = site.manager_id === currentUserId;
@@ -453,18 +428,19 @@ export function Projects() {
                         </div>
                         <div>
                           <div className={`font-bold text-base ${viewMode === "active" ? "text-slate-900" : "text-slate-500 line-through"}`}>{site.site_name}</div>
-                          <div className="text-xs text-slate-400 font-mono mt-0.5">ID: SITE-{site.id}</div>
+                          <div className="text-xs text-slate-400 font-mono mt-0.5">ID: SITE-{site.id} • PM: {staffList.find(s => s.id === site.manager_id)?.username || "Unassigned"}</div>
                         </div>
                       </div>
                     </td>
                     <td className="px-6 py-4">
-                      <div className={`font-medium flex items-center gap-1.5 mb-1 ${viewMode === "active" ? "text-slate-700" : "text-slate-400"}`}>
-                        <MapPin className={`w-3.5 h-3.5 ${viewMode === "active" ? "text-emerald-600" : "text-slate-400"}`} /> {site.address || "Unspecified Location"}
-                      </div>
-                      <div className="text-xs text-slate-400 font-mono flex items-center gap-1.5">
-                        <MapIcon className="w-3.5 h-3.5" /> {site.latitude.toFixed(4)}, {site.longitude.toFixed(4)}
-                      </div>
-                    </td>
+  <div className={`font-medium flex items-start gap-1.5 mb-1 max-w-xs whitespace-normal leading-snug ${viewMode === "active" ? "text-slate-700" : "text-slate-400"}`}>
+    <MapPin className={`w-4 h-4 shrink-0 mt-0.5 ${viewMode === "active" ? "text-emerald-600" : "text-slate-400"}`} /> 
+    <span>{site.address || "Unspecified Location"}</span>
+  </div>
+  <div className="text-xs text-slate-400 font-mono flex items-center gap-1.5 mt-1.5">
+    <MapIcon className="w-3.5 h-3.5 shrink-0" /> {site.latitude.toFixed(4)}, {site.longitude.toFixed(4)}
+  </div>
+</td>
                     <td className="px-6 py-4">
                       {canEditStatus ? (
                         <div className="relative inline-block w-44">
@@ -499,28 +475,21 @@ export function Projects() {
                             
                             {["admin", "owner"].includes(userRole) && (
                               <>
-                                <button 
-                                  onClick={() => { setEditingSite(site); setShowEditModal(true); }}
-                                  className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                                  title="Edit Details"
-                                >
+                                {/* --- NEW ERP FIX: VIEW SITE-SPECIFIC AUDIT LOGS --- */}
+                                <button onClick={() => handleViewAuditLogs(site)} className="p-1.5 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors" title="View Site Audit Logs">
+                                  <Activity className="w-4 h-4" />
+                                </button>
+                                <button onClick={() => { setEditingSite(site); setShowEditModal(true); }} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Edit Details">
                                   <Pencil className="w-4 h-4" />
                                 </button>
-                                <button 
-                                  onClick={() => { setArchivingSite(site); setShowArchiveModal(true); }}
-                                  className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                                  title="Archive Project"
-                                >
+                                <button onClick={() => { setArchivingSite(site); setShowArchiveModal(true); }} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Archive Project">
                                   <Archive className="w-4 h-4" />
                                 </button>
                               </>
                             )}
                           </>
                         ) : (
-                          <button 
-                            onClick={() => handleRestoreSite(site.id)}
-                            className="px-4 py-1.5 bg-blue-50 text-blue-700 hover:bg-blue-100 text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 shadow-sm"
-                          >
+                          <button onClick={() => handleRestoreSite(site.id)} className="px-4 py-1.5 bg-blue-50 text-blue-700 hover:bg-blue-100 text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 shadow-sm">
                             <RefreshCw className="w-3.5 h-3.5" /> Restore Site
                           </button>
                         )}
@@ -535,6 +504,42 @@ export function Projects() {
         </table>
       </div>
 
+      {/* --- SITE AUDIT LOG MODAL --- */}
+      {showAuditModal && auditSiteContext && createPortal(
+        <div className="fixed inset-0 bg-black/60 z-[9999] flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[85vh]">
+            <div className="p-4 border-b bg-emerald-50 border-emerald-100 flex justify-between items-center text-emerald-900">
+              <h2 className="text-lg font-bold flex items-center gap-2"><Activity className="w-5 h-5" /> Site Audit Logs: {auditSiteContext.site_name}</h2>
+              <button onClick={() => setShowAuditModal(false)} className="p-1 hover:bg-emerald-200/50 rounded-md transition-colors"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="p-0 overflow-y-auto flex-1 bg-neutral-50">
+              {auditLoading ? (
+                <div className="py-12 text-center text-slate-400"><Loader className="w-6 h-6 animate-spin mx-auto mb-2" /> Retrieving site history...</div>
+              ) : siteAuditLogs.length > 0 ? (
+                <div className="divide-y divide-neutral-200 bg-white">
+                  {siteAuditLogs.map((log) => {
+                    const isAlert = log.is_security_event || log.action.toUpperCase().includes("CANCELLED");
+                    return (
+                      <div key={log.id} className="p-4 flex items-start gap-4 hover:bg-neutral-50 transition-colors">
+                        <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 border ${isAlert ? 'bg-red-50 border-red-200 text-red-600' : 'bg-slate-50 border-slate-200 text-slate-600'}`}>
+                          {isAlert ? <AlertTriangle className="w-4 h-4"/> : "SA"}
+                        </div>
+                        <div>
+                          <p className={`text-sm font-medium ${isAlert ? 'text-red-900 font-bold' : 'text-slate-800'}`}>{log.action}</p>
+                          <p className="text-xs text-slate-400 mt-1 font-mono">{log.timestamp}</p>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              ) : (
+                <div className="py-12 text-center text-neutral-400 font-medium">No actions have been logged for this specific site yet.</div>
+              )}
+            </div>
+          </div>
+        </div>, document.body
+      )}
+
       {/* --- EDIT MODAL --- */}
       {showEditModal && editingSite && createPortal(
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
@@ -548,21 +553,20 @@ export function Projects() {
             <form onSubmit={handleEditSubmit} className="p-5 space-y-4">
               <div>
                 <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Project Name</label>
-                <input 
-                  type="text" required 
-                  value={editingSite.site_name} 
-                  onChange={e => setEditingSite({...editingSite, site_name: e.target.value})}
-                  className="w-full p-2 border rounded-lg outline-none focus:ring-2 focus:ring-blue-600 bg-slate-50"
-                />
+                <input type="text" required value={editingSite.site_name} onChange={e => setEditingSite({...editingSite, site_name: e.target.value})} className="w-full p-2 border rounded-lg outline-none focus:ring-2 focus:ring-blue-600 bg-slate-50" />
               </div>
               <div>
                 <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Location Address</label>
-                <input 
-                  type="text" required 
-                  value={editingSite.address} 
-                  onChange={e => setEditingSite({...editingSite, address: e.target.value})}
-                  className="w-full p-2 border rounded-lg outline-none focus:ring-2 focus:ring-blue-600 bg-slate-50"
-                />
+                <input type="text" required value={editingSite.address} onChange={e => setEditingSite({...editingSite, address: e.target.value})} className="w-full p-2 border rounded-lg outline-none focus:ring-2 focus:ring-blue-600 bg-slate-50" />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Assigned Manager</label>
+                <select value={editingSite.manager_id || ""} onChange={e => setEditingSite({...editingSite, manager_id: e.target.value})} className="w-full p-2 border rounded-lg outline-none focus:ring-2 focus:ring-blue-600 bg-slate-50 text-sm">
+                  <option value="">-- Unassigned / TBD --</option>
+                  {staffList.map(staff => (
+                    <option key={staff.id} value={staff.id}>{staff.username}</option>
+                  ))}
+                </select>
               </div>
               <div className="pt-2 flex gap-2">
                 <button type="button" onClick={() => setShowEditModal(false)} className="flex-1 py-2 font-bold text-slate-600 hover:bg-slate-100 rounded-lg">Cancel</button>
