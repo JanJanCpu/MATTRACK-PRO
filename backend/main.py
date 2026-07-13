@@ -1138,11 +1138,6 @@ def get_smart_restock_options(site_id: int, item_name: str, quantity_needed: flo
     return sorted(options, key=lambda x: x["estimated_total_cost"])
 
 
-# =====================================================================
-# DEFECT 3 (AI REMEDIATION): ENTERPRISE RAG GUARDRAILS & MIDDLEWARE
-# Fixes: Exact Entity Grounding, Taglish/Anagrams, and Spam Mitigation.
-# =====================================================================
-
 @app.post("/advisory/chat", tags=["Advisory"])
 def chat_with_ai(req: dict = Body(...), current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     api_key = os.environ.get("GEMINI_API_KEY")
@@ -1150,18 +1145,17 @@ def chat_with_ai(req: dict = Body(...), current_user: models.User = Depends(get_
     
     user_msg = req.get("message", "").strip()
 
-    # 🛡️ MIDDLEWARE DEFENSE 1: Input Length Capping (Prevent massive prompt injection payload)
+    # 🛡️ MIDDLEWARE DEFENSE 1: Input Length Capping
     if len(user_msg) > 1500:
         user_msg = user_msg[:1500] + "... [TRUNCATED]"
 
-    # 🛡️ MIDDLEWARE DEFENSE 2: Repetition Collapsing (Defeats Token-Exhaustion Spam from Test 4.2)
-    # Detects words repeated 5 or more times consecutively and collapses them to save RAG tokens
+    # 🛡️ MIDDLEWARE DEFENSE 2: Repetition Collapsing
     user_msg = re.sub(r'(\b\w+\b)(?:\s+\1\b){5,}', r'\1 [REPEATED]', user_msg, flags=re.IGNORECASE)
     
-    # Compile Internal Ledger Context
-    surplus_data = db.query(models.Inventory).all()
+    # ⚡ OPTIMIZATION: Only pull Critical/Low Stock and Surplus items to save tokens & speed up response!
+    important_items = db.query(models.Inventory).filter(models.Inventory.status.in_(["Critical", "Low Stock", "Surplus"])).limit(50).all()
     internal_context = "\n[LIVE DATABASE CONTEXT: INTERNAL PROJECT LEDGERS]:\n"
-    for item in surplus_data:
+    for item in important_items:
         site = db.query(models.ProjectSite).filter(models.ProjectSite.id == item.site_id).first()
         internal_context += f"- {item.item_name} ({item.brand}) | Qty: {item.quantity} {item.unit} | Location: {site.site_name if site else 'Unknown'} (Site ID: {item.site_id}) | FSN Status: {item.fsn_status}\n"
 
@@ -1173,7 +1167,6 @@ def chat_with_ai(req: dict = Body(...), current_user: models.User = Depends(get_
         for m in mats:
             external_context += f"- Supplier: {sup.name} (Rating: {sup.quality_rating}) | Item: {m.material_name} | Qty: {m.quantity} {m.unit} | Price: ₱{m.price} | Sister Company: {sup.is_sister_company}\n"
 
-    # 🛡️ THE ISO 25010 BENCHMARK SYSTEM INSTRUCTION PROMPT
     SYSTEM_INSTRUCTION = f"""
 You are MatTrack PRO Procurement & Logistics Advisor for PENTABUILD Construction Corporation.
 Your goal is to provide deterministic, accurate, and cost-optimized decision support based strictly on the [LIVE DATABASE CONTEXT].
@@ -1199,6 +1192,7 @@ Your goal is to provide deterministic, accurate, and cost-optimized decision sup
 
 === OPERATIONAL LOGIC & HEURISTIC MATH ===
 1. FSN SURPLUS INTERCEPTION: Before recommending an external purchase order (PO) for a reported shortage, scan all sister project sites for an idle surplus (Non-moving status). If a surplus exists, reject external procurement and recommend an internal site-to-site transfer to conserve capital.
+   CRITICAL ACTION TAG: If you recommend an internal transfer, append exactly: [TRANSFER:site_id:item_name:brand:quantity:unit].
 2. SOURCING OPTIMIZATION MATH: When evaluating multiple suppliers, execute this exact formula step-by-step in your output:
    Score = (Quality Rating * 10) - (Distance in km * 1.5) + (Sister Company Bonus: +15 if True, 0 if False)
    Recommend the supplier with the highest score.
@@ -1219,30 +1213,16 @@ Your goal is to provide deterministic, accurate, and cost-optimized decision sup
 """
 
     try:
-        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        # ⚡ OPTIMIZATION: Hardcode the fastest model directly instead of searching for it
+        config = genai.types.GenerationConfig(max_output_tokens=400, temperature=0.1)
+        model = genai.GenerativeModel(model_name='gemini-1.5-flash', system_instruction=SYSTEM_INSTRUCTION)
         
-        # 🛡️ MIDDLEWARE DEFENSE 3: Hard Generation Limits (Defeats Test 4.4 Infinite Loop)
-        config = genai.types.GenerationConfig(
-            max_output_tokens=400, 
-            temperature=0.1 # Highly deterministic output to enforce math consistency
-        )
-        
-        model = genai.GenerativeModel(
-            model_name=next((m for m in available_models if 'flash' in m), available_models[0]),
-            system_instruction=SYSTEM_INSTRUCTION
-        )
-        
-        response = model.generate_content(
-            f"--- USER REQUEST ---\n{user_msg}",
-            generation_config=config
-        )
-        
-        # Formatting guardrail for markdown lists (if Gemini returns bullet points tightly packed)
+        response = model.generate_content(f"--- USER REQUEST ---\n{user_msg}", generation_config=config)
         clean_text = response.text.replace("\n* ", "\n\n* ")
         return {"reply": clean_text}
         
     except Exception as e:
         return {"reply": f"🔒 [Security Override] or System Timeout. Request aborted cleanly. (Trace: {str(e)})"}
-    
+
 @app.get("/")
 def health_check(): return {"status": "online", "system": "MatTrack PRO ERP Core", "version": "2.6.0"}

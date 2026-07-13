@@ -3,13 +3,12 @@ import { LayoutDashboard, Boxes, BrainCircuit, Truck, Map as MapIcon, Settings, 
 import { useState, useEffect, useRef } from "react";
 import { inventoryAPI, sitesAPI, notificationsAPI } from "../../services/apiService";
 import { executeGlobalSearch, SearchableItem, SearchResult } from "../../utils/searchUtils";
-import { AiChatbotDrawer, ChatMessage } from "./AiChatbotDrawer";
 
 const navItems = [
   { name: "Dashboard", path: "/", icon: LayoutDashboard, allowedRoles: ["admin", "owner", "staff", "pm"] },
   { name: "Inventory & FSN", path: "/inventory", icon: Boxes, allowedRoles: ["admin", "owner", "staff", "pm"] },
   { name: "Material Requests", path: "/requests", icon: ClipboardList, allowedRoles: ["admin", "owner", "pm", "staff"] },
-  { name: "AI Advisory", path: "#advisory", icon: BrainCircuit, allowedRoles: ["admin", "owner", "staff", "pm"] },
+  { name: "AI Advisory", path: "/advisory", icon: BrainCircuit, allowedRoles: ["admin", "owner", "staff", "pm"] },
   { name: "Logistics", path: "/logistics", icon: Truck, allowedRoles: ["admin", "owner", "staff", "pm"] },
   { name: "Projects", path: "/projects", icon: MapIcon, allowedRoles: ["admin", "owner"] },
   { name: "Suppliers", path: "/suppliers", icon: Store, allowedRoles: ["admin", "owner", "staff", "pm"] },
@@ -36,20 +35,8 @@ export function Layout() {
   const [globalSites, setGlobalSites] = useState<any[]>([]);
   const [sellerItemCount, setSellerItemCount] = useState(0);
 
-  // --- AI ADVISORY HOISTED STATE (DEFECT 2 FIX) ---
-  const [isChatOpen, setIsChatOpen] = useState(false);
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>(() => {
-    const saved = sessionStorage.getItem("mattrack_chat_history");
-    return saved ? JSON.parse(saved) : [{ id: "welcome", role: "ai", content: "System Online. I am your MatTrack PRO Procurement Advisor. I accept English, Tagalog, or Taglish terminology (e.g., 'buhangin', 'kabilya')." }];
-  });
-  const [chatInput, setChatInput] = useState(() => sessionStorage.getItem("mattrack_chat_draft") || "");
-  const [isChatTyping, setIsChatTyping] = useState(false);
-
   const location = useLocation();
   const navigate = useNavigate();
-
-  useEffect(() => { sessionStorage.setItem("mattrack_chat_history", JSON.stringify(chatMessages)); }, [chatMessages]);
-  useEffect(() => { sessionStorage.setItem("mattrack_chat_draft", chatInput); }, [chatInput]);
 
   useEffect(() => {
     let uId = 1;
@@ -71,7 +58,7 @@ export function Layout() {
     const fetchBackgroundData = async () => {
       try {
         const notifs = await notificationsAPI.listUnread();
-        setNotifications([...notifs]); // Strict spread for UI immutability
+        setNotifications([...notifs]); 
 
         if (uRole === "seller") {
           const response = await fetch(`${import.meta.env.VITE_API_URL || "http://localhost:8000"}/seller/materials`, { headers: { Authorization: `Bearer ${localStorage.getItem("token")}` } });
@@ -94,7 +81,6 @@ export function Layout() {
           }
         }
       } catch (err: any) {
-        // DEFECT 4 FIX: Terminate polling immediately if token is unauthorized
         if (err.message === "401_UNAUTHORIZED") {
           clearInterval(intervalId);
           localStorage.removeItem("token");
@@ -154,12 +140,11 @@ export function Layout() {
 
   const filteredNavItems = navItems.filter((item) => item.allowedRoles.includes(userRole));
 
-  // --- MULTI-INDEX GLOBAL SEARCH ENGINE ---
   const catalogForSearch: SearchableItem[] = globalInventory.map(item => ({
     id: item.id,
     name: item.item_name,
     brand: item.brand,
-    site_name: globalSites.find((s) => s.id === item.site_id)?.site_name || "Unknown Site",
+    site_name: globalSites.find((s: any) => s.id === item.site_id)?.site_name || "Unknown Site",
     site_id: item.site_id,
     category: item.fsn_status,
     tags: [item.status],
@@ -183,16 +168,8 @@ export function Layout() {
 
         <nav className="px-3 space-y-1 flex-1 overflow-y-auto">
           {filteredNavItems.map((item) => {
-            const isActive = location.pathname === item.path || (item.name === "AI Advisory" && isChatOpen);
+            const isActive = location.pathname === item.path;
             const Icon = item.icon;
-
-            if (item.name === "AI Advisory") {
-              return (
-                <button key={item.name} onClick={() => { setIsChatOpen(true); setSidebarOpen(false); }} className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${isActive ? "bg-emerald-500/10 text-emerald-400" : "text-slate-300 hover:bg-slate-800 hover:text-white"}`}>
-                  <div className="flex items-center gap-3"><Icon className={`w-5 h-5 ${isActive ? "text-emerald-400" : "text-slate-400"}`} />{item.name}</div>
-                </button>
-              );
-            }
 
             return (
               <Link key={item.name} to={item.path} onClick={() => setSidebarOpen(false)} className={`flex items-center justify-between px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${isActive ? "bg-emerald-500/10 text-emerald-400" : "text-slate-300 hover:bg-slate-800 hover:text-white"}`}>
@@ -294,19 +271,6 @@ export function Layout() {
           <Outlet />
         </div>
       </main>
-
-      <AiChatbotDrawer 
-        isOpen={isChatOpen} 
-        onClose={() => setIsChatOpen(false)} 
-        messages={chatMessages} 
-        setMessages={setChatMessages} 
-        inputMessage={chatInput} 
-        setInputMessage={setChatInput} 
-        isTyping={isChatTyping} 
-        setIsTyping={setIsChatTyping} 
-        userRole={userRole} 
-        userSiteId={currentUserId} 
-      />
     </div>
   );
 }
