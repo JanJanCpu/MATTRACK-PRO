@@ -27,6 +27,7 @@ from database import engine, get_db
 
 app = FastAPI(title="MatTrack PRO API", version="2.6.0")
 
+# 🔒 CRITICAL CLOUD FIX: Explicitly open CORS for production Vercel frontend & Localhost
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], 
@@ -269,7 +270,6 @@ def get_security_logs(current_user: models.User = Depends(get_current_user), db:
     logs = db.query(models.ActivityLog).filter(models.ActivityLog.user_id == current_user.id, models.ActivityLog.is_security_event == True).order_by(models.ActivityLog.id.desc()).limit(15).all()
     return [{"id": l.id, "user_id": l.user_id, "action": l.action, "timestamp": get_local_time_string(l.timestamp), "is_security_event": l.is_security_event} for l in logs]
 
-
 # --- SITES & SMART DELETION GUARDRAIL ---
 @app.get("/sites/", response_model=List[schemas.SiteResponse], tags=["Sites"])
 def list_sites(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
@@ -286,7 +286,6 @@ def create_site(site: schemas.SiteCreate = Body(...), current_user: models.User 
     db.commit()
     return new_site
 
-# --- UPGRADED EDIT SITE ROUTE (Supports Latitude & Longitude) ---
 @app.patch("/sites/{site_id}", response_model=schemas.SiteResponse, tags=["Sites"])
 def edit_site(
     site_id: int, 
@@ -325,7 +324,6 @@ def update_project_status(site_id: int, req: schemas.ProjectStatusUpdate = Body(
     db.commit()
     return {"status": "Success", "message": f"Project status advanced to {site.stage_status}"}
 
-# --- NEW ROUTE: DEPENDENCY CHECK FOR DELETION GUARDRAILS ---
 @app.get("/sites/{site_id}/dependencies", tags=["Sites"])
 def check_site_dependencies(site_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     if current_user.role not in ["admin", "owner"]: raise HTTPException(status_code=403, detail="Unauthorized.")
@@ -339,7 +337,6 @@ def check_site_dependencies(site_id: int, current_user: models.User = Depends(ge
     ).count()
     po_count = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.site_id == site_id).count()
     
-    # Virgin site = 0 active ledgers or business transactions
     can_hard_delete = (inv_count == 0 and req_count == 0 and trans_count == 0 and po_count == 0)
     
     return {
@@ -352,7 +349,6 @@ def check_site_dependencies(site_id: int, current_user: models.User = Depends(ge
         "can_hard_delete": can_hard_delete
     }
 
-# --- UPGRADED DELETE ROUTE (Supports Hard SQL Delete vs Soft-Archive) ---
 @app.delete("/sites/{site_id}", tags=["Sites"])
 def delete_or_archive_site(
     site_id: int, 
@@ -368,7 +364,6 @@ def delete_or_archive_site(
     log_reason = f" (Reason: {reason})" if reason else ""
     
     if force_hard_delete:
-        # Backend Safeguard: Re-verify dependencies to prevent bypassing GUI
         inv_count = db.query(models.Inventory).filter(models.Inventory.site_id == site_id).count()
         req_count = db.query(models.MaterialRequest).filter(models.MaterialRequest.site_id == site_id).count()
         trans_count = db.query(models.MaterialTransfer).filter(
@@ -383,7 +378,6 @@ def delete_or_archive_site(
             )
         
         site_name = site.site_name
-        # Delete site creation/audit logs first so foreign key constraint doesn't throw an error
         db.query(models.ActivityLog).filter(models.ActivityLog.site_id == site_id).delete()
         db.delete(site)
         
@@ -396,7 +390,6 @@ def delete_or_archive_site(
         db.commit()
         return {"status": "success", "message": f"Project Site '{site_name}' permanently deleted from database."}
     else:
-        # Soft-Delete / Archiving
         site.is_active = False
         db.add(models.ActivityLog(
             user_id=current_user.id, 
@@ -427,7 +420,6 @@ def restore_site(site_id: int, current_user: models.User = Depends(get_current_u
 def get_site_audit_logs(site_id: int, db: Session = Depends(get_db)):
     logs = db.query(models.ActivityLog).filter(models.ActivityLog.site_id == site_id).order_by(models.ActivityLog.id.desc()).limit(50).all()
     return [{"id": l.id, "user_id": l.user_id, "site_id": l.site_id, "action": l.action, "timestamp": get_local_time_string(l.timestamp), "is_security_event": l.is_security_event} for l in logs]
-
 
 # --- INVENTORY & AUDIT LOGGING ---
 @app.get("/inventory/", response_model=List[schemas.InventoryResponse], tags=["Inventory"])
@@ -579,7 +571,7 @@ def mark_all_notifications_read(current_user: models.User = Depends(get_current_
     db.commit()
     return {"status": "success", "message": "All notifications marked as read."}
 
-# --- NEW ERP: MATERIAL REQUEST WORKFLOW ---
+# --- MATERIAL REQUEST WORKFLOW ---
 @app.post("/requests/", response_model=schemas.RequestResponse, tags=["Requests"])
 def create_material_request(req: schemas.RequestCreate = Body(...), current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     if current_user.role in ["admin", "owner"]: raise HTTPException(status_code=403, detail="Admins cannot create requests. You fulfill them.")
@@ -1075,7 +1067,6 @@ def update_order_status(order_id: int, status: str = Body(..., embed=True), curr
 
     db.commit()
     return {"status": "success", "new_status": order.status}
-
 
 # --- ADVISORY ENGINE ---
 @app.get("/advisory/auto-restock/{site_id}", tags=["Advisory"])

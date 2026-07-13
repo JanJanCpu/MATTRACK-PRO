@@ -7,8 +7,8 @@ import type {
   ProcurementAdvice,
 } from "../types";
 
-// AUTOMATIC NETWORK ROUTING:
-const BASE_URL = `http://${window.location.hostname}:8000`;
+// 🚀 CLOUD READY ROUTING: Reads from Vercel/Vite environment variables, falls back to localhost for offline dev!
+const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 async function fetchAPI<T>(
   endpoint: string,
