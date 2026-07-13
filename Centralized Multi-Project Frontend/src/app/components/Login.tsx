@@ -3,7 +3,6 @@ import { useNavigate } from "react-router-dom";
 import { authAPI } from "../../services/apiService";
 import { BrainCircuit, Lock, User } from "lucide-react";
 
-// THIS IS A NAMED EXPORT
 export function Login() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -20,6 +19,7 @@ export function Login() {
     try {
       const response = await authAPI.login(username, password);
       localStorage.setItem("token", response.access_token);
+      localStorage.setItem("access_token", response.access_token);
 
       const tokenPayload = JSON.parse(
         atob(response.access_token.split(".")[1]),
@@ -30,14 +30,10 @@ export function Login() {
 
       if (userRole === "staff") {
         navigate("/inventory");
+      } else if (userRole === "seller") {
+        navigate("/seller-portal"); 
       } else {
-        navigate("/");
-      }
-
-      if (userRole === "seller") {
-        navigate("/seller-portal"); // Route external sellers to their portal
-      } else {
-        navigate("/"); // Route internal PENTABUILD staff to the dashboard
+        navigate("/"); 
       }
     } catch (err: any) {
       setError(err.message || "Invalid username or password");
