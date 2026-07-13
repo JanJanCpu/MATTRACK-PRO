@@ -1144,34 +1144,36 @@ def get_smart_restock_options(site_id: int, item_name: str, quantity_needed: flo
 
 @app.post("/advisory/chat", tags=["Advisory"])
 def chat_with_ai(req: dict = Body(...), current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    api_key = os.environ.get("GEMINI_API_KEY")
-    genai.configure(api_key=api_key)
-    
-    user_msg = req.get("message", "").strip()
+    # 🛡️ Move the try block UP to catch Render DB cold-start timeouts!
+    try:
+        api_key = os.environ.get("GEMINI_API_KEY")
+        genai.configure(api_key=api_key)
+        
+        user_msg = req.get("message", "").strip()
 
-    # 🛡️ MIDDLEWARE DEFENSE 1: Input Length Capping
-    if len(user_msg) > 1500:
-        user_msg = user_msg[:1500] + "... [TRUNCATED]"
+        # 🛡️ MIDDLEWARE DEFENSE 1: Input Length Capping
+        if len(user_msg) > 1500:
+            user_msg = user_msg[:1500] + "... [TRUNCATED]"
 
-    # 🛡️ MIDDLEWARE DEFENSE 2: Repetition Collapsing
-    user_msg = re.sub(r'(\b\w+\b)(?:\s+\1\b){5,}', r'\1 [REPEATED]', user_msg, flags=re.IGNORECASE)
-    
-    # ⚡ OPTIMIZATION: Only pull Critical/Low Stock and Surplus items to save tokens & speed up response!
-    important_items = db.query(models.Inventory).filter(models.Inventory.status.in_(["Critical", "Low Stock", "Surplus"])).limit(50).all()
-    internal_context = "\n[LIVE DATABASE CONTEXT: INTERNAL PROJECT LEDGERS]:\n"
-    for item in important_items:
-        site = db.query(models.ProjectSite).filter(models.ProjectSite.id == item.site_id).first()
-        internal_context += f"- {item.item_name} ({item.brand}) | Qty: {item.quantity} {item.unit} | Location: {site.site_name if site else 'Unknown'} (Site ID: {item.site_id}) | FSN Status: {item.fsn_status}\n"
+        # 🛡️ MIDDLEWARE DEFENSE 2: Repetition Collapsing
+        user_msg = re.sub(r'(\b\w+\b)(?:\s+\1\b){5,}', r'\1 [REPEATED]', user_msg, flags=re.IGNORECASE)
+        
+        # ⚡ OPTIMIZATION: Only pull Critical/Low Stock and Surplus items
+        important_items = db.query(models.Inventory).filter(models.Inventory.status.in_(["Critical", "Low Stock", "Surplus"])).limit(50).all()
+        internal_context = "\n[LIVE DATABASE CONTEXT: INTERNAL PROJECT LEDGERS]:\n"
+        for item in important_items:
+            site = db.query(models.ProjectSite).filter(models.ProjectSite.id == item.site_id).first()
+            internal_context += f"- {item.item_name} ({item.brand}) | Qty: {item.quantity} {item.unit} | Location: {site.site_name if site else 'Unknown'} (Site ID: {item.site_id}) | FSN Status: {item.fsn_status}\n"
 
-    # Compile External Supplier Context
-    suppliers = db.query(models.Supplier).all()
-    external_context = "\n[LIVE DATABASE CONTEXT: EXTERNAL SUPPLIER CATALOG]:\n"
-    for sup in suppliers:
-        mats = db.query(models.SupplierMaterial).filter(models.SupplierMaterial.supplier_id == sup.id).all()
-        for m in mats:
-            external_context += f"- Supplier: {sup.name} (Rating: {sup.quality_rating}) | Item: {m.material_name} | Qty: {m.quantity} {m.unit} | Price: ₱{m.price} | Sister Company: {sup.is_sister_company}\n"
+        # Compile External Supplier Context
+        suppliers = db.query(models.Supplier).all()
+        external_context = "\n[LIVE DATABASE CONTEXT: EXTERNAL SUPPLIER CATALOG]:\n"
+        for sup in suppliers:
+            mats = db.query(models.SupplierMaterial).filter(models.SupplierMaterial.supplier_id == sup.id).all()
+            for m in mats:
+                external_context += f"- Supplier: {sup.name} (Rating: {sup.quality_rating}) | Item: {m.material_name} | Qty: {m.quantity} {m.unit} | Price: ₱{m.price} | Sister Company: {sup.is_sister_company}\n"
 
-    SYSTEM_INSTRUCTION = f"""
+        SYSTEM_INSTRUCTION = f"""
 You are MatTrack PRO Procurement & Logistics Advisor for PENTABUILD Construction Corporation.
 Your goal is to provide deterministic, accurate, and cost-optimized decision support based strictly on the [LIVE DATABASE CONTEXT].
 
@@ -1215,18 +1217,17 @@ Your goal is to provide deterministic, accurate, and cost-optimized decision sup
 {internal_context}
 {external_context}
 """
-
-    try:
-        # ⚡ OPTIMIZATION: Hardcode the fastest model directly instead of searching for it
+        
         config = genai.types.GenerationConfig(max_output_tokens=400, temperature=0.1)
-        model = genai.GenerativeModel(model_name='gemini-1.5-flash', system_instruction=SYSTEM_INSTRUCTION)
+        model = genai.GenerativeModel(model_name='gemini-2.5-flash', system_instruction=SYSTEM_INSTRUCTION)
         
         response = model.generate_content(f"--- USER REQUEST ---\n{user_msg}", generation_config=config)
         clean_text = response.text.replace("\n* ", "\n\n* ")
         return {"reply": clean_text}
         
     except Exception as e:
-        return {"reply": f"🔒 [Security Override] or System Timeout. Request aborted cleanly. (Trace: {str(e)})"}
+        # ⚡ Instead of crashing and giving a COgitRS error, we reply politely to the user UI
+        return {"reply": f"The cloud server is currently waking up from standby (Cold Start). Please wait a few seconds and try sending your message again! (Log: {str(e)})"}
 
 @app.get("/")
 def health_check(): return {"status": "online", "system": "MatTrack PRO ERP Core", "version": "2.6.0"}
