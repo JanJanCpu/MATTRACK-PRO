@@ -29,15 +29,11 @@ from database import engine, get_db
 
 app = FastAPI(title="MatTrack PRO API", version="2.6.0")
 
-# 🔒 CRITICAL CLOUD FIX: Explicitly open CORS for production Vercel frontend & Localhost
+# 🔒 CRITICAL CLOUD FIX: Bulletproof CORS for all environments
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173", 
-        "http://localhost:3000"
-    ],
-    allow_origin_regex=r"https://.*\.vercel\.app", # <--- Allows any Vercel deployment link
-    allow_credentials=True,
+    allow_origins=["*"], # <--- Allows any Vercel domain automatically
+    allow_credentials=False, # <--- Bearer tokens don't need credentials. This makes CORS invincible!
     allow_methods=["*"],
     allow_headers=["*"],
 )
