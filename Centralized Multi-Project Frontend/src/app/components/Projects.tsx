@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { 
   Building2, MapPin, Search, Plus, Loader, HardHat, 
   Settings2, Archive, AlertTriangle, X, Pencil, Map as MapIcon, RefreshCw,
-  ChevronDown, Activity
+  ChevronDown, Activity, Trash2, ShieldAlert, CheckCircle2, Database, Info
 } from "lucide-react";
 import { createPortal } from "react-dom";
 
@@ -54,18 +54,27 @@ export function Projects() {
   
   const [viewMode, setViewMode] = useState<"active" | "archived">("active");
   
+  // --- EDIT MODAL STATE (With Map Support) ---
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingSite, setEditingSite] = useState<any>(null);
+  const [isSearchingEdit, setIsSearchingEdit] = useState(false);
   
-  const [showArchiveModal, setShowArchiveModal] = useState(false);
-  const [archivingSite, setArchivingSite] = useState<any>(null);
+  // --- SMART DELETION GUARDRAIL STATE ---
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [targetSite, setTargetSite] = useState<any>(null);
+  const [siteDependencies, setSiteDependencies] = useState<any>(null);
+  const [checkingDependencies, setCheckingDependencies] = useState(false);
+  const [deleteReason, setDeleteReason] = useState("Typographical Error / Misspelled Name");
+  const [deleteConfirmText, setDeleteConfirmText] = useState("");
+  const [isProcessingDelete, setIsProcessingDelete] = useState(false);
 
-  // --- NEW ERP FIX: SITE-SPECIFIC AUDIT LOG STATE ---
+  // --- SITE-SPECIFIC AUDIT LOG STATE ---
   const [showAuditModal, setShowAuditModal] = useState(false);
   const [siteAuditLogs, setSiteAuditLogs] = useState<any[]>([]);
   const [auditLoading, setAuditLoading] = useState(false);
   const [auditSiteContext, setAuditSiteContext] = useState<any>(null);
 
+  // --- ADD SITE FORM STATE ---
   const [showAddForm, setShowAddForm] = useState(false);
   const [newSite, setNewSite] = useState({ name: "", address: "", manager_id: "", lat: 14.5995, lon: 120.9842 });
   const [staffList, setStaffList] = useState<any[]>([]);
@@ -138,6 +147,20 @@ export function Projects() {
     setIsSearching(false);
   };
 
+  const handleAddressSearchEdit = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    if (!editingSite.address?.trim()) return;
+
+    setIsSearchingEdit(true);
+    const coords = await geocodeAddress(editingSite.address);
+    if (coords) {
+      setEditingSite((prev: any) => ({ ...prev, latitude: coords.lat, longitude: coords.lon }));
+    } else {
+      alert("Address not found. Please add a city or drop the pin manually on the map.");
+    }
+    setIsSearchingEdit(false);
+  };
+
   const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
@@ -148,7 +171,6 @@ export function Projects() {
         address: newSite.address,
         lat: newSite.lat,
         lon: newSite.lon,
-        // --- NEW ERP FIX: Ensure explicitly handling Unassigned ---
         manager_id: newSite.manager_id ? parseInt(newSite.manager_id) : undefined
       });
       
@@ -163,6 +185,7 @@ export function Projects() {
     }
   };
 
+  // --- UPGRADED EDIT SUBMIT (Includes Latitude & Longitude) ---
   const handleEditSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
@@ -178,14 +201,15 @@ export function Projects() {
         body: JSON.stringify({
           name: editingSite.site_name,
           address: editingSite.address,
-          // Allow changing the assigned manager
-          manager_id: editingSite.manager_id ? parseInt(editingSite.manager_id) : undefined
+          manager_id: editingSite.manager_id ? parseInt(editingSite.manager_id) : undefined,
+          latitude: editingSite.latitude,
+          longitude: editingSite.longitude
         })
       });
 
       if (!response.ok) throw new Error("Failed to update site");
       
-      alert("Site details updated successfully.");
+      alert("Site details & map coordinates updated successfully.");
       setShowEditModal(false);
       fetchSites();
     } catch (err) {
@@ -202,25 +226,61 @@ export function Projects() {
     }
   };
 
-  const handleArchiveConfirm = async () => {
+  // --- SMART DELETION / ARCHIVE GUARDRAIL HANDLER ---
+  const handleOpenDeleteGuardrail = async (site: any) => {
+    setTargetSite(site);
+    setDeleteConfirmText("");
+    setDeleteReason("Typographical Error / Misspelled Name");
+    setSiteDependencies(null);
+    setShowDeleteModal(true);
+    setCheckingDependencies(true);
+
+    try {
+      const baseUrl = `http://${window.location.hostname}:8000`;
+      const token = localStorage.getItem("token");
+      const res = await fetch(`${baseUrl}/sites/${site.id}/dependencies`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setSiteDependencies(data);
+      }
+    } catch (e) {
+      console.error("Failed to check site dependencies");
+    } finally {
+      setCheckingDependencies(false);
+    }
+  };
+
+  const handleExecuteDeleteOrArchive = async () => {
+    if (!targetSite || !siteDependencies) return;
+    setIsProcessingDelete(true);
+
     try {
       const baseUrl = `http://${window.location.hostname}:8000`;
       const token = localStorage.getItem("token");
       
-      const response = await fetch(`${baseUrl}/sites/${archivingSite.id}`, {
+      const isHardDelete = siteDependencies.can_hard_delete;
+      const queryParams = `?force_hard_delete=${isHardDelete}&reason=${encodeURIComponent(deleteReason)}`;
+
+      const response = await fetch(`${baseUrl}/sites/${targetSite.id}${queryParams}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${token}` }
       });
 
       if (!response.ok) {
         const err = await response.json();
-        throw new Error(err.detail || "Failed to archive site");
+        throw new Error(err.detail || "Failed to process site action");
       }
       
-      setShowArchiveModal(false);
+      const resData = await response.json();
+      alert(resData.message || "Action completed successfully.");
+      setShowDeleteModal(false);
       fetchSites(); 
     } catch (err: any) {
       alert(err.message);
+    } finally {
+      setIsProcessingDelete(false);
     }
   };
 
@@ -243,7 +303,6 @@ export function Projects() {
     }
   };
 
-  // --- FETCH SPECIFIC AUDIT LOGS ---
   const handleViewAuditLogs = async (site: any) => {
     setAuditSiteContext(site);
     setShowAuditModal(true);
@@ -277,7 +336,6 @@ export function Projects() {
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
-          
           {["admin", "owner"].includes(userRole) && (
             <div className="flex bg-slate-200/70 p-1 rounded-lg">
               <button 
@@ -340,7 +398,6 @@ export function Projects() {
                 onChange={e => setNewSite({...newSite, manager_id: e.target.value})}
                 className="w-full p-2 border rounded-lg text-sm bg-slate-50 focus:ring-2 focus:ring-emerald-600 outline-none font-medium text-slate-700"
               >
-                {/* --- NEW ERP FIX: Unassigned Selection --- */}
                 <option value="">-- Unassigned / TBD --</option>
                 {staffList.map(staff => (
                   <option key={staff.id} value={staff.id}>
@@ -374,7 +431,7 @@ export function Projects() {
             <div className="md:col-span-4 mb-2 mt-2">
               <div className="flex items-center justify-between mb-1">
                 <label className="block text-xs font-bold text-slate-500 uppercase">
-                  Location Preview
+                  Location Preview (Drag or Click Map to Adjust)
                 </label>
                 <span className="text-[10px] text-slate-400 font-mono">
                   {newSite.lat.toFixed(4)}, {newSite.lon.toFixed(4)}
@@ -433,14 +490,14 @@ export function Projects() {
                       </div>
                     </td>
                     <td className="px-6 py-4">
-  <div className={`font-medium flex items-start gap-1.5 mb-1 max-w-xs whitespace-normal leading-snug ${viewMode === "active" ? "text-slate-700" : "text-slate-400"}`}>
-    <MapPin className={`w-4 h-4 shrink-0 mt-0.5 ${viewMode === "active" ? "text-emerald-600" : "text-slate-400"}`} /> 
-    <span>{site.address || "Unspecified Location"}</span>
-  </div>
-  <div className="text-xs text-slate-400 font-mono flex items-center gap-1.5 mt-1.5">
-    <MapIcon className="w-3.5 h-3.5 shrink-0" /> {site.latitude.toFixed(4)}, {site.longitude.toFixed(4)}
-  </div>
-</td>
+                      <div className={`font-medium flex items-start gap-1.5 mb-1 max-w-xs whitespace-normal leading-snug ${viewMode === "active" ? "text-slate-700" : "text-slate-400"}`}>
+                        <MapPin className={`w-4 h-4 shrink-0 mt-0.5 ${viewMode === "active" ? "text-emerald-600" : "text-slate-400"}`} /> 
+                        <span>{site.address || "Unspecified Location"}</span>
+                      </div>
+                      <div className="text-xs text-slate-400 font-mono flex items-center gap-1.5 mt-1.5">
+                        <MapIcon className="w-3.5 h-3.5 shrink-0" /> {site.latitude?.toFixed(4)}, {site.longitude?.toFixed(4)}
+                      </div>
+                    </td>
                     <td className="px-6 py-4">
                       {canEditStatus ? (
                         <div className="relative inline-block w-44">
@@ -463,7 +520,6 @@ export function Projects() {
                     </td>
                     <td className="px-6 py-4 text-right">
                       <div className="flex items-center justify-end gap-2">
-                        
                         {viewMode === "active" ? (
                           <>
                             <Link 
@@ -475,15 +531,14 @@ export function Projects() {
                             
                             {["admin", "owner"].includes(userRole) && (
                               <>
-                                {/* --- NEW ERP FIX: VIEW SITE-SPECIFIC AUDIT LOGS --- */}
                                 <button onClick={() => handleViewAuditLogs(site)} className="p-1.5 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors" title="View Site Audit Logs">
                                   <Activity className="w-4 h-4" />
                                 </button>
-                                <button onClick={() => { setEditingSite(site); setShowEditModal(true); }} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Edit Details">
+                                <button onClick={() => { setEditingSite(site); setShowEditModal(true); }} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Edit Details & Pin">
                                   <Pencil className="w-4 h-4" />
                                 </button>
-                                <button onClick={() => { setArchivingSite(site); setShowArchiveModal(true); }} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Archive Project">
-                                  <Archive className="w-4 h-4" />
+                                <button onClick={() => handleOpenDeleteGuardrail(site)} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Delete or Archive Project">
+                                  <Trash2 className="w-4 h-4" />
                                 </button>
                               </>
                             )}
@@ -493,7 +548,6 @@ export function Projects() {
                             <RefreshCw className="w-3.5 h-3.5" /> Restore Site
                           </button>
                         )}
-
                       </div>
                     </td>
                   </tr>
@@ -540,66 +594,211 @@ export function Projects() {
         </div>, document.body
       )}
 
-      {/* --- EDIT MODAL --- */}
+      {/* --- UPGRADED EDIT MODAL (WITH INTERACTIVE MAP PIN) --- */}
       {showEditModal && editingSite && createPortal(
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[9999] flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]">
             <div className="p-4 border-b flex justify-between items-center bg-slate-50">
               <h3 className="font-bold text-slate-800 flex items-center gap-2">
-                <Pencil className="w-4 h-4 text-blue-600" /> Edit Project Site
+                <Pencil className="w-4 h-4 text-blue-600" /> Edit Site Details & Map Pin
               </h3>
               <button onClick={() => setShowEditModal(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5"/></button>
             </div>
-            <form onSubmit={handleEditSubmit} className="p-5 space-y-4">
+            <form onSubmit={handleEditSubmit} className="p-5 space-y-4 overflow-y-auto flex-1">
               <div>
                 <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Project Name</label>
-                <input type="text" required value={editingSite.site_name} onChange={e => setEditingSite({...editingSite, site_name: e.target.value})} className="w-full p-2 border rounded-lg outline-none focus:ring-2 focus:ring-blue-600 bg-slate-50" />
+                <input type="text" required value={editingSite.site_name} onChange={e => setEditingSite({...editingSite, site_name: e.target.value})} className="w-full p-2 border rounded-lg outline-none focus:ring-2 focus:ring-blue-600 bg-slate-50 font-medium" />
               </div>
-              <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Location Address</label>
-                <input type="text" required value={editingSite.address} onChange={e => setEditingSite({...editingSite, address: e.target.value})} className="w-full p-2 border rounded-lg outline-none focus:ring-2 focus:ring-blue-600 bg-slate-50" />
-              </div>
+              
               <div>
                 <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Assigned Manager</label>
-                <select value={editingSite.manager_id || ""} onChange={e => setEditingSite({...editingSite, manager_id: e.target.value})} className="w-full p-2 border rounded-lg outline-none focus:ring-2 focus:ring-blue-600 bg-slate-50 text-sm">
+                <select value={editingSite.manager_id || ""} onChange={e => setEditingSite({...editingSite, manager_id: e.target.value})} className="w-full p-2 border rounded-lg outline-none focus:ring-2 focus:ring-blue-600 bg-slate-50 text-sm font-medium">
                   <option value="">-- Unassigned / TBD --</option>
                   {staffList.map(staff => (
                     <option key={staff.id} value={staff.id}>{staff.username}</option>
                   ))}
                 </select>
               </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Location Address</label>
+                <div className="flex gap-2">
+                  <input type="text" required value={editingSite.address} onChange={e => setEditingSite({...editingSite, address: e.target.value})} className="w-full p-2 border rounded-lg outline-none focus:ring-2 focus:ring-blue-600 bg-slate-50 font-medium text-sm" />
+                  <button
+                    onClick={handleAddressSearchEdit}
+                    disabled={isSearchingEdit}
+                    className="px-3 bg-slate-900 text-white font-bold rounded-lg flex items-center justify-center gap-1.5 hover:bg-slate-800 disabled:opacity-70 transition-colors shrink-0 text-xs"
+                  >
+                    {isSearchingEdit ? <Loader className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
+                    Locate
+                  </button>
+                </div>
+              </div>
+
+              {/* Interactive Map Inside Edit Modal */}
+              <div className="pt-1">
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-bold text-slate-500 uppercase">
+                    Adjust Coordinates (Drag or Click Map)
+                  </label>
+                  <span className="text-[10px] text-slate-400 font-mono">
+                    {editingSite.latitude?.toFixed(4)}, {editingSite.longitude?.toFixed(4)}
+                  </span>
+                </div>
+                <div className="h-[200px] w-full rounded-lg overflow-hidden border border-slate-200 relative z-0 shadow-inner">
+                  <MapContainer center={[editingSite.latitude || 14.5995, editingSite.longitude || 120.9842]} zoom={14} className="w-full h-full">
+                    <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+                    <MapPinPicker position={[editingSite.latitude || 14.5995, editingSite.longitude || 120.9842]} setPosition={(pos) => setEditingSite({...editingSite, latitude: pos[0], longitude: pos[1]})} />
+                    <MapUpdater position={[editingSite.latitude || 14.5995, editingSite.longitude || 120.9842]} />
+                  </MapContainer>
+                </div>
+              </div>
+
               <div className="pt-2 flex gap-2">
-                <button type="button" onClick={() => setShowEditModal(false)} className="flex-1 py-2 font-bold text-slate-600 hover:bg-slate-100 rounded-lg">Cancel</button>
-                <button type="submit" className="flex-1 py-2 font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-lg">Save Changes</button>
+                <button type="button" onClick={() => setShowEditModal(false)} className="flex-1 py-2.5 font-bold text-slate-600 border border-slate-200 hover:bg-slate-100 rounded-lg text-sm">Cancel</button>
+                <button type="submit" className="flex-1 py-2.5 font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-sm text-sm">Save Changes</button>
               </div>
             </form>
           </div>
         </div>, document.body
       )}
 
-      {/* --- ARCHIVE MODAL --- */}
-      {showArchiveModal && archivingSite && createPortal(
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden">
-            <div className="p-6 text-center space-y-4">
-              <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-2">
-                <AlertTriangle className="w-8 h-8 text-red-600" />
+      {/* --- SMART DELETION GUARDRAIL MODAL --- */}
+      {showDeleteModal && targetSite && createPortal(
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden">
+            
+            <div className="p-4 border-b flex justify-between items-center bg-slate-50">
+              <h3 className="font-bold text-slate-800 flex items-center gap-2 text-base">
+                <ShieldAlert className="w-5 h-5 text-red-600" /> Project Site Deletion Guardrail
+              </h3>
+              <button onClick={() => setShowDeleteModal(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5"/></button>
+            </div>
+
+            <div className="p-6 space-y-5">
+              <div className="flex items-center gap-3 bg-slate-50 p-3 rounded-lg border border-slate-200">
+                <div className="w-10 h-10 rounded-full bg-slate-200/80 flex items-center justify-center shrink-0 font-bold text-slate-700">
+                  <Building2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="font-bold text-slate-900 text-sm">{targetSite.site_name}</h4>
+                  <p className="text-xs text-slate-400 font-mono">SITE ID: SITE-{targetSite.id} • {targetSite.address}</p>
+                </div>
               </div>
-              <h3 className="text-xl font-black text-slate-900">Archive Project Site?</h3>
-              <p className="text-sm text-slate-600 leading-relaxed">
-                You are about to archive <strong>{archivingSite.site_name}</strong>. The site will be hidden from the active ledger, but all historical inventory logs and financial audit trails will be preserved for security purposes.
-              </p>
-              
-              <div className="pt-4 flex gap-3">
-                <button onClick={() => setShowArchiveModal(false)} className="flex-1 py-2.5 font-bold text-slate-600 border border-slate-200 hover:bg-slate-50 rounded-lg">Cancel</button>
-                <button onClick={handleArchiveConfirm} className="flex-1 py-2.5 font-bold text-white bg-red-600 hover:bg-red-700 rounded-lg shadow-sm flex items-center justify-center gap-2">
-                  <Archive className="w-4 h-4" /> Archive Site
-                </button>
-              </div>
+
+              {checkingDependencies ? (
+                <div className="py-8 text-center text-slate-500">
+                  <Loader className="w-7 h-7 animate-spin text-slate-700 mx-auto mb-3" />
+                  <p className="text-sm font-medium">Scanning database relationships & audit trails...</p>
+                </div>
+              ) : siteDependencies ? (
+                <>
+                  {/* TIER 1: UNTOUCHED VIRGIN SITE (CAN HARD DELETE) */}
+                  {siteDependencies.can_hard_delete ? (
+                    <div className="space-y-4 animate-in fade-in">
+                      <div className="bg-emerald-50 border border-emerald-200 p-3 rounded-lg flex items-start gap-2.5 text-emerald-900">
+                        <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                        <div className="text-xs leading-relaxed">
+                          <strong className="font-bold block mb-0.5">Untouched Virgin Site (0 Active Ledgers)</strong>
+                          This site has no associated inventory items, material requests, or transfer records. You may permanently delete it from the SQL database without breaking foreign key constraints.
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Select Reason for Deletion</label>
+                        <select
+                          value={deleteReason}
+                          onChange={(e) => setDeleteReason(e.target.value)}
+                          className="w-full p-2.5 border border-slate-300 rounded-lg bg-slate-50 font-bold text-xs text-slate-700 outline-none focus:ring-2 focus:ring-slate-900"
+                        >
+                          <option value="Typographical Error / Misspelled Name">Typographical Error / Misspelled Name</option>
+                          <option value="Duplicate Project Entry">Duplicate Project Entry</option>
+                          <option value="Created by Mistake / Test Data">Created by Mistake / Test Data</option>
+                          <option value="Project Aborted Prior to Commencement">Project Aborted Prior to Commencement</option>
+                        </select>
+                      </div>
+
+                      <div className="bg-slate-50 p-3 rounded-lg border border-slate-200">
+                        <p className="text-xs text-slate-600 mb-2">
+                          To confirm permanent SQL deletion, please type <code className="font-mono bg-white border border-slate-300 px-1.5 py-0.5 rounded font-bold text-red-600">SITE-{targetSite.id}</code> below:
+                        </p>
+                        <input
+                          type="text"
+                          placeholder={`SITE-${targetSite.id}`}
+                          value={deleteConfirmText}
+                          onChange={(e) => setDeleteConfirmText(e.target.value)}
+                          className="w-full p-2 border border-slate-300 rounded-lg text-sm font-mono font-bold text-slate-900 focus:ring-2 focus:ring-red-600 outline-none"
+                        />
+                      </div>
+
+                      <div className="pt-2 flex gap-3">
+                        <button type="button" onClick={() => setShowDeleteModal(false)} className="flex-1 py-2.5 font-bold text-slate-600 border border-slate-200 hover:bg-slate-50 rounded-lg text-sm">Cancel</button>
+                        <button
+                          type="button"
+                          onClick={handleExecuteDeleteOrArchive}
+                          disabled={deleteConfirmText !== `SITE-${targetSite.id}` || isProcessingDelete}
+                          className="flex-1 py-2.5 font-bold text-white bg-red-600 hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg shadow-sm text-sm flex items-center justify-center gap-1.5 transition-all"
+                        >
+                          {isProcessingDelete ? <Loader className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                          Permanent SQL Delete
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    /* TIER 2: ACTIVE CONSTRUCTION SITE (MUST SOFT-DELETE / ARCHIVE) */
+                    <div className="space-y-4 animate-in fade-in">
+                      <div className="bg-amber-50 border border-amber-200 p-3 rounded-lg flex items-start gap-2.5 text-amber-900">
+                        <Database className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                        <div className="text-xs leading-relaxed">
+                          <strong className="font-bold block mb-0.5">Active Construction Site (Database Safeguard Engaged)</strong>
+                          This site is tied to active business records: <span className="font-bold">{siteDependencies.inventory_count} inventory items</span>, <span className="font-bold">{siteDependencies.requests_count} requests</span>, and <span className="font-bold">{siteDependencies.transfers_count} transfer logs</span>. To prevent relational database corruption and comply with enterprise audit rules, physical deletion is locked.
+                        </div>
+                      </div>
+
+                      <div className="bg-neutral-50 p-3.5 rounded-lg border border-neutral-200 text-xs text-neutral-600 flex items-start gap-2">
+                        <Info className="w-4 h-4 text-blue-500 shrink-0 mt-0.5" />
+                        <span>
+                          Proceeding will execute a <strong>Soft-Delete (Archive)</strong>. The project will immediately disappear from the field managers' active ledger while preserving timestamped transaction histories.
+                        </span>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Reason for Archiving</label>
+                        <select
+                          value={deleteReason}
+                          onChange={(e) => setDeleteReason(e.target.value)}
+                          className="w-full p-2.5 border border-slate-300 rounded-lg bg-slate-50 font-bold text-xs text-slate-700 outline-none focus:ring-2 focus:ring-slate-900"
+                        >
+                          <option value="Project Completed / Handed Over">Project Completed / Handed Over</option>
+                          <option value="Project Temporarily Suspended">Project Temporarily Suspended</option>
+                          <option value="Consolidated with Another Site">Consolidated with Another Site</option>
+                        </select>
+                      </div>
+
+                      <div className="pt-2 flex gap-3">
+                        <button type="button" onClick={() => setShowDeleteModal(false)} className="flex-1 py-2.5 font-bold text-slate-600 border border-slate-200 hover:bg-slate-50 rounded-lg text-sm">Cancel</button>
+                        <button
+                          type="button"
+                          onClick={handleExecuteDeleteOrArchive}
+                          disabled={isProcessingDelete}
+                          className="flex-1 py-2.5 font-bold text-white bg-slate-900 hover:bg-slate-800 disabled:opacity-70 rounded-lg shadow-sm text-sm flex items-center justify-center gap-1.5 transition-all"
+                        >
+                          {isProcessingDelete ? <Loader className="w-4 h-4 animate-spin" /> : <Archive className="w-4 h-4" />}
+                          Archive Site (Soft-Delete)
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="py-6 text-center text-red-500 font-medium">Failed to inspect database dependencies. Please try again.</div>
+              )}
+
             </div>
           </div>
         </div>, document.body
       )}
+
     </div>
   );
 }

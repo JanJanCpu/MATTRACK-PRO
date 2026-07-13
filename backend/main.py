@@ -25,7 +25,7 @@ load_dotenv()
 import models, schemas
 from database import engine, get_db
 
-app = FastAPI(title="MatTrack PRO API", version="2.5.0")
+app = FastAPI(title="MatTrack PRO API", version="2.6.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -76,7 +76,7 @@ def get_real_travel_time(lat1, lon1, lat2, lon2):
         return round(response['routes'][0]['duration'] / 60, 2)
     except: return None 
 
-# --- CLASSMATE'S LIVE FUEL API WITH SAFE MEMORY CACHE ---
+# --- LIVE FUEL API WITH SAFE MEMORY CACHE ---
 _cached_diesel_price = None
 _last_fetch_time = None
 
@@ -84,7 +84,6 @@ def fetch_live_diesel_price() -> float:
     global _cached_diesel_price, _last_fetch_time
     DEFAULT_DIESEL = 74.03 # Fallback price
     
-    # PERFORMANCE CACHE: Use cached price if fetched within the last hour
     if _cached_diesel_price and _last_fetch_time and (dt_datetime.now() - _last_fetch_time).total_seconds() < 3600:
         return _cached_diesel_price
 
@@ -104,7 +103,7 @@ def fetch_live_diesel_price() -> float:
                     price = fuels["diesel"].get("price")
                     if price:
                         clean_price = float(price)
-                        if 50.0 <= clean_price <= 95.0: # Filter out trolls/typos
+                        if 50.0 <= clean_price <= 95.0:
                             timestamp_str = fuels["diesel"].get("timestamp")
                             if timestamp_str:
                                 entry_date = dt_datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
@@ -121,16 +120,12 @@ def fetch_live_diesel_price() -> float:
         print(f"API Fetch failed: {e}. Defaulting to baseline.")
         return DEFAULT_DIESEL
 
-# --- CLASSMATE'S TRUCK MATH ROUTINE ---
 def calculate_transfer_cost(distance_km: float, quantity_needed: float):
     FUEL_PRICE_PHP = fetch_live_diesel_price() 
-    
-    TRUCK_CAPACITY = 100.0 # Example: 100 bags/units per truck
+    TRUCK_CAPACITY = 100.0 
     trips = math.ceil(quantity_needed / TRUCK_CAPACITY)
-    
     TRUCK_KM_PER_LITER = 6.0
     DISPATCH_FEE = 300.00
-    
     total_fuel_cost = (distance_km / TRUCK_KM_PER_LITER) * FUEL_PRICE_PHP * trips
     total_dispatch_fee = DISPATCH_FEE * trips
     return round(total_fuel_cost + total_dispatch_fee, 2)
@@ -141,7 +136,6 @@ def calculate_procurement_cost(unit_price: float, quantity: float, distance_km: 
     delivery_fee = distance_km * SUPPLIER_DELIVERY_RATE
     return round(material_cost + delivery_fee, 2)
 
-# --- AUTO-STATUS INTELLIGENCE FIX ---
 def get_dynamic_status(quantity: float, baseline: float, current_status: str, is_asset: bool = False) -> str:
     if current_status in ["Sufficient", "Surplus", "Fully Utilized", "Out of Stock"]: 
         return current_status
@@ -276,7 +270,7 @@ def get_security_logs(current_user: models.User = Depends(get_current_user), db:
     return [{"id": l.id, "user_id": l.user_id, "action": l.action, "timestamp": get_local_time_string(l.timestamp), "is_security_event": l.is_security_event} for l in logs]
 
 
-# --- SITES ---
+# --- SITES & SMART DELETION GUARDRAIL ---
 @app.get("/sites/", response_model=List[schemas.SiteResponse], tags=["Sites"])
 def list_sites(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     return db.query(models.ProjectSite).filter(models.ProjectSite.is_active == True).order_by(models.ProjectSite.id.asc()).all()
@@ -292,8 +286,18 @@ def create_site(site: schemas.SiteCreate = Body(...), current_user: models.User 
     db.commit()
     return new_site
 
+# --- UPGRADED EDIT SITE ROUTE (Supports Latitude & Longitude) ---
 @app.patch("/sites/{site_id}", response_model=schemas.SiteResponse, tags=["Sites"])
-def edit_site(site_id: int, name: str = Body(None), address: str = Body(None), manager_id: int = Body(None), current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+def edit_site(
+    site_id: int, 
+    name: str = Body(None), 
+    address: str = Body(None), 
+    manager_id: int = Body(None), 
+    latitude: float = Body(None),
+    longitude: float = Body(None),
+    current_user: models.User = Depends(get_current_user), 
+    db: Session = Depends(get_db)
+):
     if current_user.role not in ["admin", "owner"]: raise HTTPException(status_code=403, detail="Unauthorized.")
     site = db.query(models.ProjectSite).filter(models.ProjectSite.id == site_id).first()
     if not site: raise HTTPException(status_code=404, detail="Site not found")
@@ -301,7 +305,10 @@ def edit_site(site_id: int, name: str = Body(None), address: str = Body(None), m
     if name: site.site_name = name
     if address: site.address = address
     if manager_id is not None: site.manager_id = manager_id
-    db.add(models.ActivityLog(user_id=current_user.id, action=f"User [{current_user.username}]: Modified Project Site settings for '{old_name}' (Site #{site_id}).", site_id=site_id, is_security_event=False))
+    if latitude is not None: site.latitude = latitude
+    if longitude is not None: site.longitude = longitude
+    
+    db.add(models.ActivityLog(user_id=current_user.id, action=f"User [{current_user.username}]: Modified Project Site settings & coordinates for '{old_name}' (Site #{site_id}).", site_id=site_id, is_security_event=False))
     db.commit()
     db.refresh(site)
     return site
@@ -318,15 +325,87 @@ def update_project_status(site_id: int, req: schemas.ProjectStatusUpdate = Body(
     db.commit()
     return {"status": "Success", "message": f"Project status advanced to {site.stage_status}"}
 
-@app.delete("/sites/{site_id}", tags=["Sites"])
-def soft_delete_site(site_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+# --- NEW ROUTE: DEPENDENCY CHECK FOR DELETION GUARDRAILS ---
+@app.get("/sites/{site_id}/dependencies", tags=["Sites"])
+def check_site_dependencies(site_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     if current_user.role not in ["admin", "owner"]: raise HTTPException(status_code=403, detail="Unauthorized.")
     site = db.query(models.ProjectSite).filter(models.ProjectSite.id == site_id).first()
     if not site: raise HTTPException(status_code=404, detail="Site not found")
-    site.is_active = False
-    db.add(models.ActivityLog(user_id=current_user.id, action=f"User [{current_user.username}]: SECURITY EVENT - Project Site '{site.site_name}' (Site #{site_id}) was securely archived.", site_id=site_id, is_security_event=True))
-    db.commit()
-    return {"status": "success", "message": "Project Site securely archived."}
+    
+    inv_count = db.query(models.Inventory).filter(models.Inventory.site_id == site_id).count()
+    req_count = db.query(models.MaterialRequest).filter(models.MaterialRequest.site_id == site_id).count()
+    trans_count = db.query(models.MaterialTransfer).filter(
+        (models.MaterialTransfer.source_site_id == site_id) | (models.MaterialTransfer.destination_site_id == site_id)
+    ).count()
+    po_count = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.site_id == site_id).count()
+    
+    # Virgin site = 0 active ledgers or business transactions
+    can_hard_delete = (inv_count == 0 and req_count == 0 and trans_count == 0 and po_count == 0)
+    
+    return {
+        "site_id": site_id,
+        "site_name": site.site_name,
+        "inventory_count": inv_count,
+        "requests_count": req_count,
+        "transfers_count": trans_count,
+        "po_count": po_count,
+        "can_hard_delete": can_hard_delete
+    }
+
+# --- UPGRADED DELETE ROUTE (Supports Hard SQL Delete vs Soft-Archive) ---
+@app.delete("/sites/{site_id}", tags=["Sites"])
+def delete_or_archive_site(
+    site_id: int, 
+    force_hard_delete: bool = Query(False), 
+    reason: str = Query(None),
+    current_user: models.User = Depends(get_current_user), 
+    db: Session = Depends(get_db)
+):
+    if current_user.role not in ["admin", "owner"]: raise HTTPException(status_code=403, detail="Unauthorized.")
+    site = db.query(models.ProjectSite).filter(models.ProjectSite.id == site_id).first()
+    if not site: raise HTTPException(status_code=404, detail="Site not found")
+    
+    log_reason = f" (Reason: {reason})" if reason else ""
+    
+    if force_hard_delete:
+        # Backend Safeguard: Re-verify dependencies to prevent bypassing GUI
+        inv_count = db.query(models.Inventory).filter(models.Inventory.site_id == site_id).count()
+        req_count = db.query(models.MaterialRequest).filter(models.MaterialRequest.site_id == site_id).count()
+        trans_count = db.query(models.MaterialTransfer).filter(
+            (models.MaterialTransfer.source_site_id == site_id) | (models.MaterialTransfer.destination_site_id == site_id)
+        ).count()
+        po_count = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.site_id == site_id).count()
+        
+        if inv_count > 0 or req_count > 0 or trans_count > 0 or po_count > 0:
+            raise HTTPException(
+                status_code=400, 
+                detail="SQL Safeguard Violation: Cannot physically delete a site with existing inventory ledgers, purchase orders, or transfer records. You must archive it instead."
+            )
+        
+        site_name = site.site_name
+        # Delete site creation/audit logs first so foreign key constraint doesn't throw an error
+        db.query(models.ActivityLog).filter(models.ActivityLog.site_id == site_id).delete()
+        db.delete(site)
+        
+        db.add(models.ActivityLog(
+            user_id=current_user.id, 
+            action=f"User [{current_user.username}]: SECURITY EVENT - Hard SQL Delete executed for untouched Project Site '{site_name}' (Site #{site_id}){log_reason}.", 
+            site_id=None, 
+            is_security_event=True
+        ))
+        db.commit()
+        return {"status": "success", "message": f"Project Site '{site_name}' permanently deleted from database."}
+    else:
+        # Soft-Delete / Archiving
+        site.is_active = False
+        db.add(models.ActivityLog(
+            user_id=current_user.id, 
+            action=f"User [{current_user.username}]: SECURITY EVENT - Project Site '{site.site_name}' (Site #{site_id}) was securely archived{log_reason}.", 
+            site_id=site_id, 
+            is_security_event=True
+        ))
+        db.commit()
+        return {"status": "success", "message": "Project Site successfully archived."}
 
 @app.get("/sites/archived", response_model=List[schemas.SiteResponse], tags=["Sites"])
 def list_archived_sites(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -1016,7 +1095,6 @@ def get_smart_restock_options(site_id: int, item_name: str, quantity_needed: flo
         source_site = db.query(models.ProjectSite).filter(models.ProjectSite.id == item.site_id).first()
         dist = compute_distance(target_site.latitude, target_site.longitude, source_site.latitude, source_site.longitude)
         
-        # --- FIXED AI ROUTING CALL ---
         est_cost = calculate_transfer_cost(dist, quantity_needed) 
         
         options.append({ 
@@ -1082,4 +1160,4 @@ def chat_with_ai(req: dict = Body(...), current_user: models.User = Depends(get_
         return {"reply": f"⚠️ **System Error:** {str(e)}"}
     
 @app.get("/")
-def health_check(): return {"status": "online", "system": "MatTrack PRO ERP Core", "version": "2.5.0"}
+def health_check(): return {"status": "online", "system": "MatTrack PRO ERP Core", "version": "2.6.0"}

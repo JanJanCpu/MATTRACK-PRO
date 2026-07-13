@@ -50,7 +50,7 @@ class SessionResponse(BaseModel):
 class ActivityLogResponse(BaseModel):
     id: int
     user_id: int
-    site_id: Optional[int] = None  # NEW ERP FIX: Track logs by site
+    site_id: Optional[int] = None
     action: str
     timestamp: str 
     is_security_event: bool = False 
@@ -84,6 +84,14 @@ class SiteCreate(BaseModel):
     lon: float
     manager_id: Optional[int] = None 
 
+# NEW ERP FIX: Formalized Schema for Site Updates (Coordinates included)
+class SiteUpdate(BaseModel):
+    name: Optional[str] = None
+    address: Optional[str] = None
+    manager_id: Optional[int] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+
 class SiteProgressUpdate(BaseModel):
     stage_status: str
 
@@ -101,6 +109,17 @@ class SiteResponse(BaseModel):
     manager_id: Optional[int] = None 
     class Config:
         from_attributes = True
+
+# NEW ERP FIX: Response model for the Smart Deletion Dependency Check
+class SiteDependencyResponse(BaseModel):
+    site_id: int
+    site_name: str
+    inventory_count: int
+    requests_count: int
+    transfers_count: int
+    po_count: int
+    can_hard_delete: bool
+
 
 # --- INVENTORY ---
 class InventoryBase(BaseModel):
