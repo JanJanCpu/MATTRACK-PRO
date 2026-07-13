@@ -1147,6 +1147,11 @@ def chat_with_ai(
     db: Session = Depends(get_db)):
     try:
         api_key = os.environ.get("GEMINI_API_KEY")
+        
+        # 🛡️ FAIL-SAFE: Prevent infinite hanging if key is missing
+        if not api_key or api_key.strip() == "":
+            return {"reply": "❌ EMERGENCY DIAGNOSTIC: GEMINI_API_KEY is missing from Render Environment Variables! Please add it."}
+            
         genai.configure(api_key=api_key)
         
         # 'req' is now officially defined here
