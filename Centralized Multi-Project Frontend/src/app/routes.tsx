@@ -16,7 +16,7 @@ import { SellerPortal } from "./components/Seller";
 import { Login } from "./components/Login";
 import { SellerOrders } from "./components/SellerOrders";
 
-// --- NEW REQUESTS PAGE IMPORT ---
+// --- MATERIAL REQUESTS PAGE IMPORT ---
 import { Requests } from "./components/Requests";
 
 // --- STANDARD BOUNCER: Checks if you are logged in at all ---
@@ -38,19 +38,15 @@ const RoleProtectedRoute = ({
   if (!token) return <Navigate to="/login" replace />;
 
   try {
-    // Decode the token to check the role
     const payload = JSON.parse(atob(token.split(".")[1]));
     const userRole = payload.role ? payload.role.toLowerCase() : "staff";
 
-    // If their role is NOT in the allowed list, kick them to the inventory page
     if (!allowedRoles.includes(userRole)) {
       return <Navigate to="/inventory" replace />;
     }
 
-    // If they are allowed, render the page
     return <>{children}</>;
   } catch (error) {
-    // If the token is fake or broken, kick them out completely
     return <Navigate to="/login" replace />;
   }
 };
@@ -77,7 +73,7 @@ export const router = createBrowserRouter([
       { path: "logistics", Component: LogisticsMap },
       { path: "settings", Component: Settings },
 
-      // --- NEW MATERIAL REQUESTS ROUTE ---
+      // --- MATERIAL REQUESTS ROUTE ---
       {
         path: "requests",
         element: (
