@@ -5,7 +5,6 @@ import { createBrowserRouter, Navigate } from "react-router-dom";
 import { Layout } from "./components/Layout";
 import { Dashboard } from "./components/Dashboard";
 import { Inventory } from "./components/Inventory";
-import { Advisory } from "./components/Advisory";
 import { LogisticsMap } from "./components/LogisticsMap";
 import { Projects } from "./components/Projects";
 import { ProjectDetails } from "./components/ProjectDetails";
@@ -73,7 +72,6 @@ export const router = createBrowserRouter([
     children: [
       { index: true, Component: Dashboard },
       { path: "inventory", Component: Inventory },
-      { path: "advisory", Component: Advisory },
       { path: "logistics", Component: LogisticsMap },
       { path: "settings", Component: Settings },
 
