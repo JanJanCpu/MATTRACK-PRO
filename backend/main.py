@@ -32,7 +32,11 @@ app = FastAPI(title="MatTrack PRO API", version="2.6.0")
 # 🔒 CRITICAL CLOUD FIX: Explicitly open CORS for production Vercel frontend & Localhost
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], 
+    allow_origins=[
+        "http://localhost:5173", 
+        "http://localhost:3000"
+    ],
+    allow_origin_regex=r"https://.*\.vercel\.app", # <--- This magic line allows ANY Vercel deployment link to connect!
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
