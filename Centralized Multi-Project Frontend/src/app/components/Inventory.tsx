@@ -1,9 +1,4 @@
-import {
-  PackageSearch, Plus, Trash2, Upload, Download, Sparkles, AlertTriangle,
-  Activity, ListChecks, X, History, Filter, Lock, ArrowDownToLine,
-  ArrowUpFromLine, Send, Truck, CheckCircle, FilePlus, BookmarkPlus, Ban,
-  Building2, Flag, Star, ShoppingCart, Info
-} from "lucide-react";
+import { PackageSearch, Plus, Trash2, Upload, Download, Sparkles, AlertTriangle, Activity, ListChecks, X, History, Filter, Lock, ArrowDownToLine, ArrowUpFromLine, Send, Truck, CheckCircle, FilePlus, BookmarkPlus, Ban, Building2, Flag, Star, ShoppingCart, Info } from "lucide-react";
 import React, { useState, useEffect } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { inventoryAPI, sitesAPI, suppliersAPI, transferAPI, requestsAPI, purchaseOrdersAPI } from "../../services/apiService";
@@ -14,6 +9,7 @@ import "leaflet/dist/leaflet.css";
 import L from "leaflet";
 import { Navigation, MapPin, Clock } from "lucide-react";
 import { createPortal } from "react-dom";
+import { useCtrlFHighlight } from "../../hooks/useCtrlFHighlight";
 
 delete (L.Icon.Default.prototype as any)._getIconUrl;
 L.Icon.Default.mergeOptions({ iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png", iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png", shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png" });
@@ -36,6 +32,8 @@ function RouteFitter({ coords }: { coords: [number, number][] }) { const map = u
 interface InventoryWithCategory extends InventoryItem { category: "Fast-Moving" | "Slow-Moving" | "Non-Moving"; siteName: string; baseline_quantity: number; }
 
 export function Inventory() {
+  useCtrlFHighlight(); // <-- NEW: Invokes Global Search Auto-Scroll Logic
+
   const navigate = useNavigate(); const location = useLocation();
   const [currentUserRole, setCurrentUserRole] = useState("staff"); const [currentUserId, setCurrentUserId] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<"inventory" | "audit" | "incoming" | "procurement">("inventory");
@@ -60,7 +58,6 @@ export function Inventory() {
   const [showRestockModal, setShowRestockModal] = useState(false); const [restockItem, setRestockItem] = useState<InventoryWithCategory | null>(null); const [restockOptions, setRestockOptions] = useState<any[]>([]); const [isRestockLoading, setIsRestockLoading] = useState(false); const [hasScanned, setHasScanned] = useState(false); const [restockQty, setRestockQty] = useState<number>(0);
   const [receivingPO, setReceivingPO] = useState<any | null>(null); const [poRating, setPoRating] = useState<number>(0);
 
-  // --- NEW UX FEATURE: Extract Historic Brands for Autosuggest Memory ---
   const historicBrands = Array.from(new Set(inventoryData.map(i => i.brand).filter(b => b && b.trim() !== "" && b !== "Generic/No Brand")));
 
   const handleSmartCatalogSelect = (selectedName: string) => { const match = MASTER_CATALOG.find(c => c.name === selectedName); if (match) setNewItem(prev => ({ ...prev, item_name: match.name, brand: match.brand, unit: match.unit })); else setNewItem(prev => ({ ...prev, item_name: selectedName })); };
@@ -192,7 +189,6 @@ export function Inventory() {
                   <input type="text" list="catalog-items" className="w-full p-2 border rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none font-medium" placeholder="Search master catalog..." value={newItem.item_name} onChange={(e) => handleSmartCatalogSelect(e.target.value)} required />
                   <datalist id="catalog-items">{MASTER_CATALOG.map(c => <option key={c.sku} value={c.name}>{c.sku}: {c.brand}</option>)}</datalist>
                 </div>
-                {/* --- NEW UX FEATURE: Autosuggest Brand Input --- */}
                 <div>
                   <label className="block text-xs font-bold text-neutral-500 mb-1">Brand/Spec</label>
                   <input type="text" list="historic-brands" className="w-full p-2 border rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none" placeholder="e.g. Republic (Optional)" value={newItem.brand} onChange={(e) => setNewItem({ ...newItem, brand: e.target.value })} />
@@ -205,7 +201,6 @@ export function Inventory() {
                     <label className="block text-xs font-bold text-neutral-500 mb-1">Quantity (100%)</label>
                     <input type="number" placeholder="0" className="w-full p-2 border rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none font-bold" value={newItem.quantity} onChange={(e) => setNewItem({ ...newItem, quantity: e.target.value === "" ? "" : Number(e.target.value) })} required />
                   </div>
-                  {/* --- NEW UX FEATURE: Custom Unit Combo Box --- */}
                   <div>
                     <label className="block text-xs font-bold text-neutral-500 mb-1">Unit</label>
                     <input type="text" list="unit-options" className="w-full p-2 border rounded-lg text-sm bg-white focus:ring-2 focus:ring-emerald-500 outline-none font-medium" value={newItem.unit} onChange={(e) => setNewItem({ ...newItem, unit: e.target.value })} placeholder="e.g. Bags" required />
@@ -254,7 +249,7 @@ export function Inventory() {
                       const isDepleted = item.status === 'Fully Utilized' || item.status === 'Out of Stock' || item.status === 'Depleted';
 
                       return (
-                        <tr key={item.id} className={`hover:bg-neutral-50/50 transition-colors ${selectedIds.includes(item.id) ? "bg-red-50/30" : ""} ${!canEdit && isDeleteMode ? "opacity-50 bg-neutral-50" : ""}`}>
+                        <tr key={item.id} id={`row-${item.id}`} className={`hover:bg-neutral-50/50 transition-colors ${selectedIds.includes(item.id) ? "bg-red-50/30" : ""} ${!canEdit && isDeleteMode ? "opacity-50 bg-neutral-50" : ""}`}>
                           {isDeleteMode && (<td className="px-5 py-4 text-center">{canEdit ? (<input type="checkbox" className="w-4 h-4 rounded border-gray-300 text-red-600 cursor-pointer" checked={selectedIds.includes(item.id)} onChange={() => handleSelectItem(item.id)} />) : ( <Lock className="w-4 h-4 text-neutral-300 mx-auto" /> )}</td>)}
                           <td className="px-5 py-4 text-neutral-900"><div className="font-bold text-sm">{item.item_name}</div><div className="text-xs text-neutral-500">{item.brand}</div></td>
                           <td className="px-5 py-4 text-neutral-600 font-medium">{item.siteName}</td>
@@ -275,17 +270,14 @@ export function Inventory() {
                                   <button onClick={() => { setActiveTransactionItem(item); setModalType("IN"); }} className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors" title={isAsset ? "Mark as Available" : "Restock Delivery Intake"}><ArrowDownToLine className="w-4 h-4" /></button>
                                   <button onClick={() => { setActiveTransactionItem(item); setModalType("OUT"); }} className="p-2 text-slate-700 hover:bg-slate-100 rounded-lg transition-colors" title={isAsset ? "Mark as In Use" : "Log Field Consumption"}><ArrowUpFromLine className="w-4 h-4" /></button>
                                   
-                                  {/* PM ONLY: Restock Request Button */}
                                   {currentUserRole === "staff" && isCriticalOrLow && !isAsset && !isDeleteMode && (
                                     <button onClick={() => { setRequestItem(item); setRequestQty(Math.max(1, item.baseline_quantity - item.quantity)); setShowRequestModal(true); }} className="p-2 ml-1 text-amber-600 hover:bg-amber-50 rounded-lg transition-colors flex items-center gap-1 text-xs font-bold border border-amber-200 shadow-sm" title="Send Replenishment Request to Admin"><ShoppingCart className="w-4 h-4" /> Restock</button>
                                   )}
 
-                                  {/* EVERYONE (Admin & PM): Lifecycle Flag Button */}
                                   {!isAsset && !isDeleteMode && (
                                     <button onClick={() => { setActiveTransactionItem(item); setModalType("LIFECYCLE"); }} className="p-2 ml-1 text-indigo-600 hover:bg-indigo-50 border border-transparent hover:border-indigo-200 rounded-lg transition-colors" title="Manage Status Lifecycle"><Flag className="w-4 h-4" /></button>
                                   )}
                                   
-                                  {/* ADMIN ONLY: AI Advisor & Network Transfer */}
                                   {currentUserRole !== "staff" && !isDeleteMode && (
                                     <>
                                       <button onClick={() => handleSmartRestock(item)} className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors flex items-center gap-1 text-xs font-bold" title="Logistics Advisor"><Sparkles className="w-4 h-4" /></button>

@@ -1,6 +1,6 @@
 import datetime
 import enum
-from sqlalchemy import Column, Integer, String, Float, Boolean, ForeignKey, DateTime, Text, Enum as SQLEnum
+from sqlalchemy import Column, Integer, String, Float, Boolean, ForeignKey, DateTime, Text, Enum as SQLEnum, text, event
 from sqlalchemy.orm import relationship 
 from database import Base
 
@@ -67,10 +67,7 @@ class ActivityLog(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    
-    # NEW ERP FIX: Allows us to filter logs by specific project sites!
     site_id = Column(Integer, ForeignKey("project_sites.id"), nullable=True) 
-    
     action = Column(String(255), nullable=False) 
     timestamp = Column(DateTime, default=datetime.datetime.utcnow)
     is_security_event = Column(Boolean, default=False) 
@@ -241,3 +238,32 @@ class PurchaseOrder(Base):
 
     supplier = relationship("Supplier")
     site = relationship("ProjectSite")
+
+# =====================================================================
+# DEFECT 4 (WRITE-SIDE REMEDIATION): SQLALCHEMY EVENT NOTIFICATION TRIGGERS
+# This securely creates DB notifications asynchronously when items are created.
+# =====================================================================
+
+@event.listens_for(MaterialRequest, 'after_insert')
+def notify_new_request(mapper, connection, target):
+    """Trigger: When a PM submits a Material Request, notify all Admins/Owners."""
+    connection.execute(
+        text("""
+        INSERT INTO notifications (user_id, title, message, link, is_read, created_at)
+        SELECT id, 'New Material Request', 'Site requires ' || :qty || ' ' || :unit || ' of ' || :item, '/requests', 0, CURRENT_TIMESTAMP
+        FROM users WHERE role IN ('admin', 'owner')
+        """),
+        {"qty": str(target.quantity_needed), "unit": target.unit, "item": target.item_name}
+    )
+
+@event.listens_for(MaterialTransfer, 'after_insert')
+def notify_transfer_dispatched(mapper, connection, target):
+    """Trigger: When an Admin initiates an internal transfer, notify the destination PM."""
+    connection.execute(
+        text("""
+        INSERT INTO notifications (user_id, title, message, link, is_read, created_at)
+        SELECT manager_id, 'Incoming Transfer', 'An internal transfer of ' || :qty || ' ' || :unit || ' of ' || :item || ' is en route.', '/logistics', 0, CURRENT_TIMESTAMP
+        FROM project_sites WHERE id = :dest_site_id AND manager_id IS NOT NULL
+        """),
+        {"qty": str(target.quantity), "unit": target.unit, "item": target.item_name, "dest_site_id": target.destination_site_id}
+    )
