@@ -1204,21 +1204,19 @@ Never invent data. Only report exactly what is in the [LIVE DATABASE CONTEXT]. I
         
         config = genai.types.GenerationConfig(temperature=0.1)
         
-        try:
-            # ⚡ ONLY USE VALID PRODUCTION MODELS to prevent 404 hanging
-            model = genai.GenerativeModel(model_name='gemini-1.5-flash', system_instruction=SYSTEM_INSTRUCTION)
-            response = model.generate_content(f"--- USER REQUEST ---\n{user_msg}", generation_config=config)
-        except Exception as model_err:
-            try:
-                # Fallback to the classic 1.0 pro if 1.5 flash is restricted in their specific API key tier
-                model = genai.GenerativeModel(model_name='gemini-pro')
-                response = model.generate_content(f"INSTRUCTIONS:\n{SYSTEM_INSTRUCTION}\n\n--- USER REQUEST ---\n{user_msg}", generation_config=config)
-            except Exception as inner_err:
-                return {"reply": f"AI Engine failed to respond. (Error: {str(inner_err)})"}
+        # ⚡ DYNAMIC MODEL SELECTION (The "Fast" method)
+        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        fastest_model = next((m for m in available_models if 'flash' in m), available_models[0])
+        
+        model = genai.GenerativeModel(model_name=fastest_model)
+        
+        # Combine system instructions and user message to guarantee compatibility with all models
+        full_prompt = f"INSTRUCTIONS:\n{SYSTEM_INSTRUCTION}\n\n--- USER REQUEST ---\n{user_msg}"
+        response = model.generate_content(full_prompt, generation_config=config)
 
         clean_text = response.text.replace("\n* ", "\n\n* ")
         return {"reply": clean_text}
-        
+            
     except Exception as e:
         return {"reply": f"System Diagnostics: Connection to backend dropped. (Log: {str(e)})"}
 
