@@ -27,6 +27,9 @@ const defaultIcon = new L.Icon({
   iconAnchor: [12, 41],
 });
 
+// 🚀 CLOUD READY ROUTING
+const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+
 function MapPinPicker({ position, setPosition }: { position: [number, number]; setPosition: (pos: [number, number]) => void; }) {
   useMapEvents({ click(e) { setPosition([e.latlng.lat, e.latlng.lng]); } });
   return <Marker position={position} icon={defaultIcon} />;
@@ -84,12 +87,10 @@ export function Projects() {
   const fetchSites = async () => {
     setLoading(true);
     try {
-      const baseUrl = `http://${window.location.hostname}:8000`;
       const token = localStorage.getItem("token");
-      
       const endpoint = viewMode === "active" ? "/sites/" : "/sites/archived";
       
-      const response = await fetch(`${baseUrl}${endpoint}`, {
+      const response = await fetch(`${BASE_URL}${endpoint}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       
@@ -105,9 +106,8 @@ export function Projects() {
 
   const fetchStaff = async () => {
     try {
-      const baseUrl = `http://${window.location.hostname}:8000`;
       const token = localStorage.getItem("token");
-      const response = await fetch(`${baseUrl}/users/managers`, {
+      const response = await fetch(`${BASE_URL}/users/managers`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       if (response.ok) {
@@ -185,14 +185,12 @@ export function Projects() {
     }
   };
 
-  // --- UPGRADED EDIT SUBMIT (Includes Latitude & Longitude) ---
   const handleEditSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const baseUrl = `http://${window.location.hostname}:8000`;
       const token = localStorage.getItem("token");
       
-      const response = await fetch(`${baseUrl}/sites/${editingSite.id}`, {
+      const response = await fetch(`${BASE_URL}/sites/${editingSite.id}`, {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
@@ -226,7 +224,6 @@ export function Projects() {
     }
   };
 
-  // --- SMART DELETION / ARCHIVE GUARDRAIL HANDLER ---
   const handleOpenDeleteGuardrail = async (site: any) => {
     setTargetSite(site);
     setDeleteConfirmText("");
@@ -236,9 +233,8 @@ export function Projects() {
     setCheckingDependencies(true);
 
     try {
-      const baseUrl = `http://${window.location.hostname}:8000`;
       const token = localStorage.getItem("token");
-      const res = await fetch(`${baseUrl}/sites/${site.id}/dependencies`, {
+      const res = await fetch(`${BASE_URL}/sites/${site.id}/dependencies`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       if (res.ok) {
@@ -257,13 +253,12 @@ export function Projects() {
     setIsProcessingDelete(true);
 
     try {
-      const baseUrl = `http://${window.location.hostname}:8000`;
       const token = localStorage.getItem("token");
       
       const isHardDelete = siteDependencies.can_hard_delete;
       const queryParams = `?force_hard_delete=${isHardDelete}&reason=${encodeURIComponent(deleteReason)}`;
 
-      const response = await fetch(`${baseUrl}/sites/${targetSite.id}${queryParams}`, {
+      const response = await fetch(`${BASE_URL}/sites/${targetSite.id}${queryParams}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -286,10 +281,9 @@ export function Projects() {
 
   const handleRestoreSite = async (siteId: number) => {
     try {
-      const baseUrl = `http://${window.location.hostname}:8000`;
       const token = localStorage.getItem("token");
       
-      const response = await fetch(`${baseUrl}/sites/${siteId}/restore`, {
+      const response = await fetch(`${BASE_URL}/sites/${siteId}/restore`, {
         method: "PATCH",
         headers: { Authorization: `Bearer ${token}` }
       });
