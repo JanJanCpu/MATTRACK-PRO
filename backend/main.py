@@ -950,7 +950,7 @@ def cancel_po(po_id: int, current_user: models.User = Depends(get_current_user),
             sup_mat.stock_level = "Available"
             
     if po.linked_request_id:
-        mat_req = db.query(models.MaterialRequest).filter(models.MaterialRequest.id == req.linked_request_id).first()
+        mat_req = db.query(models.MaterialRequest).filter(models.MaterialRequest.id == po.linked_request_id).first()
         if mat_req:
             mat_req.status = "Pending Approval"
             mat_req.fulfillment_method = None
@@ -1140,24 +1140,23 @@ def get_smart_restock_options(site_id: int, item_name: str, quantity_needed: flo
 
     return sorted(options, key=lambda x: x["estimated_total_cost"])
 
-
-# =====================================================================
-# DEFECT 3 (AI REMEDIATION): AGGRESSIVELY HELPFUL RAG GUARDRAILS
-# Fixes: API 404 Model Error, String Truncation, and Lazy Conversations
-# =====================================================================
-
 @app.post("/advisory/chat", tags=["Advisory"])
-def chat_with_ai(req: dict = Body(...), current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+def chat_with_ai(
+    req: dict = Body(...), 
+    current_user: models.User = Depends(get_current_user), 
+    db: Session = Depends(get_db)):
     try:
         api_key = os.environ.get("GEMINI_API_KEY")
         genai.configure(api_key=api_key)
         
+        # 'req' is now officially defined here
         user_msg = req.get("message", "").strip()
 
-        # 🛡️ FIX: Expanded buffer from 1500 to 6000 to prevent truncating long histories
+        # 🛡️ MIDDLEWARE DEFENSE 1: Input Length Capping
         if len(user_msg) > 6000:
             user_msg = user_msg[:6000] + "... [TRUNCATED]"
 
+        # 🛡️ MIDDLEWARE DEFENSE 2: Repetition Collapsing
         user_msg = re.sub(r'(\b\w+\b)(?:\s+\1\b){5,}', r'\1 [REPEATED]', user_msg, flags=re.IGNORECASE)
         
         important_items = db.query(models.Inventory).filter(models.Inventory.status.in_(["Critical", "Low Stock", "Surplus"])).limit(50).all()
