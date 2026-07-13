@@ -6,7 +6,8 @@ import {
 import { useLocation, useNavigate } from "react-router-dom";
 import { transferAPI, requestsAPI } from "../../services/apiService";
 
-const BASE_URL = `http://${window.location.hostname}:8000`;
+// 🚀 CLOUD READY ROUTING: Uses secure Vercel environment variable
+const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 async function fetchAPI<T>(endpoint: string, options?: RequestInit): Promise<T> {
   const token = localStorage.getItem("token") || localStorage.getItem("access_token");
