@@ -13,6 +13,7 @@ import uuid
 from pytz import timezone 
 import jose
 from jose import jwt
+import bcrypt 
 from passlib.context import CryptContext
 
 # --- AI INTEGRATION IMPORTS ---
@@ -52,10 +53,18 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 def hash_password(password: str): 
-    return pwd_context.hash(str(password).strip())
+    pwd_bytes = str(password).strip().encode('utf-8')
+    salt = bcrypt.gensalt()
+    return bcrypt.hashpw(pwd_bytes, salt).decode('utf-8')
 
 def verify_password(plain_password: str, hashed_password: str): 
-    return pwd_context.verify(str(plain_password).strip(), hashed_password)
+    try:
+        return bcrypt.checkpw(
+            str(plain_password).strip().encode('utf-8'), 
+            str(hashed_password).encode('utf-8')
+        )
+    except Exception:
+        return False
 
 def create_access_token(data: dict):
     to_encode = data.copy()
