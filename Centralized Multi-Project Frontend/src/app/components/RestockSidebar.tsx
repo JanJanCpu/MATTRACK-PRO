@@ -4,7 +4,24 @@ import { Star, Truck, ShieldCheck, AlertCircle, Filter, ArrowLeft } from "lucide
 export function RestockSidebar({ options, onClose, onExecute, userRole, onHoverOption, onLeaveOption }: any) {
   const [activeFilter, setActiveFilter] = useState<"ALL" | "INTERNAL" | "TRUSTED">("ALL");
 
-  if (!options || options.length === 0) return null;
+  // ---> THE FIX: Beautiful Empty State instead of returning null <---
+  if (!options || options.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full w-full p-6 text-center bg-white border-r border-neutral-200 animate-in slide-in-from-left-4 duration-300">
+        <AlertCircle className="w-10 h-10 text-neutral-300 mb-3" />
+        <h3 className="text-sm font-bold text-neutral-800">No Sources Found</h3>
+        <p className="text-xs text-neutral-500 mt-1 mb-4">
+          The AI could not find any internal surplus or verified suppliers carrying this exact material.
+        </p>
+        <button
+          onClick={onClose}
+          className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white font-bold rounded-lg text-xs transition-colors flex items-center gap-2"
+        >
+          <ArrowLeft className="w-3.5 h-3.5" /> Back to Map
+        </button>
+      </div>
+    );
+  }
 
   const isAdmin = ["admin", "owner"].includes(userRole);
 
@@ -41,7 +58,7 @@ export function RestockSidebar({ options, onClose, onExecute, userRole, onHoverO
         </button>
       </div>
 
-      {/* SCROLLABLE LIST OF OPTIONS (Redesigned for vertical sidebar) */}
+      {/* SCROLLABLE LIST OF OPTIONS */}
       <div className="p-3 overflow-y-auto flex-1 space-y-3 bg-neutral-100">
         {filteredOptions.length === 0 ? (
           <div className="text-center py-6 text-neutral-500 text-xs font-medium">No options match this filter.</div>
