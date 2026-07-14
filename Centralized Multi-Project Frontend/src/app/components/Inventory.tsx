@@ -262,7 +262,12 @@ export function Inventory() {
                               {!isAsset && (<div className="w-full bg-neutral-200 rounded-full h-1.5 mt-1 overflow-hidden"><div className={`h-1.5 rounded-full ${progressPercent <= 10 ? 'bg-red-500' : progressPercent <= 30 ? 'bg-amber-500' : 'bg-emerald-500'}`} style={{ width: `${progressPercent}%` }}></div></div>)}
                             </div>
                           </td>
-                          <td className="px-5 py-4 text-center"><span className={`inline-flex px-2.5 py-1 rounded border text-[10px] font-bold uppercase tracking-wider ${getStatusColor(item.status)}`}>{item.status}</span></td>
+                           <td className="px-5 py-4 text-center">
+  <div className="flex flex-col items-center gap-1">
+    <span className={`inline-flex px-2.5 py-1 rounded border text-[10px] font-bold uppercase tracking-wider ${getStatusColor(item.status)}`}>{item.status}</span>
+    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">{item.category}</span>
+  </div>
+</td>
                           <td className="px-5 py-4 text-right">
                             <div className="flex justify-end gap-1">
                               {canEdit ? (
