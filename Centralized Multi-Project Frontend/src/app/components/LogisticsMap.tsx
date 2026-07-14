@@ -9,7 +9,7 @@ import {
 } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
-import { Search, MapPin, Loader2, Lock } from "lucide-react"; // Added Lock icon
+import { Search, MapPin, Loader2, Lock } from "lucide-react";
 import { sitesAPI, suppliersAPI, inventoryAPI, requestsAPI, purchaseOrdersAPI, transferAPI } from "../../services/apiService";
 import type { ProjectSite, Supplier, Inventory as InventoryItem } from "../../types";
 
@@ -42,7 +42,7 @@ const icons = {
 
 interface MapLocation {
   id: number; 
-  manager_id?: number; // THE FIX: Added to track who owns the site
+  manager_id?: number;
   type: "project" | "supplier" | "crowdsource" | "surplus" | "shortage";
   name: string;
   address: string;
@@ -53,14 +53,13 @@ interface MapLocation {
   criticalQty?: number;
 }
 
-// ---> THE FIX: Passed userRole and currentUserId to check permissions <---
+
 function LocationMarker({ loc, hoveredRoute, onFindRoutes, loadingRoutes, userRole, currentUserId }: any) {
   const isHovered = hoveredRoute ? (
     (hoveredRoute.from[0] === loc.lat && hoveredRoute.from[1] === loc.lng) || 
     (hoveredRoute.to[0] === loc.lat && hoveredRoute.to[1] === loc.lng)
   ) : true;
 
-  // SECURITY CHECK
   const isAdmin = ["admin", "owner"].includes(userRole);
   const isSiteManager = currentUserId === loc.manager_id;
   const canManageSite = isAdmin || isSiteManager;
@@ -118,7 +117,7 @@ export function LogisticsMap() {
   const [error, setError] = useState<string | null>(null);
 
   const [userRole, setUserRole] = useState("pm");
-  const [currentUserId, setCurrentUserId] = useState<number | null>(null); // THE FIX: Tracking the logged in user
+  const [currentUserId, setCurrentUserId] = useState<number | null>(null); 
   
   const activeReqRef = useRef<{siteId: number | null, itemName: string, qty: number}>({ 
     siteId: null, itemName: "", qty: 0 
@@ -143,7 +142,7 @@ export function LogisticsMap() {
       try {
         const payload = JSON.parse(atob(token.split(".")[1]));
         setUserRole(payload.role ? payload.role.toLowerCase() : "pm");
-        setCurrentUserId(payload.id); // THE FIX: Extracting the user ID
+        setCurrentUserId(payload.id); 
       } catch (e) {}
     }
     fetchData();
@@ -183,7 +182,7 @@ export function LogisticsMap() {
 
           return {
             id: site.id,
-            manager_id: site.manager_id, // THE FIX: Storing who owns the site
+            manager_id: site.manager_id, 
             type, name: site.site_name, address, lat: site.latitude, lng: site.longitude, details, criticalItem: criticalItemName, criticalQty: criticalQty,
           };
         }),
@@ -207,7 +206,8 @@ export function LogisticsMap() {
       
       activeReqRef.current = { siteId, itemName, qty };
       
-      const response = await fetch(`http://localhost:8000/advisory/auto-restock/${siteId}?item_name=${encodeURIComponent(itemName)}&quantity_needed=${qty}`);
+      const baseUrl = import.meta.env.VITE_API_URL || "https://mattrack-personal.onrender.com";
+      const response = await fetch(`${baseUrl}/advisory/auto-restock/${siteId}?item_name=${encodeURIComponent(itemName)}&quantity_needed=${qty}`);
       
       if (!response.ok) throw new Error("Failed to fetch routes");
       const data = await response.json();
@@ -374,7 +374,6 @@ export function LogisticsMap() {
                 />
               )}
 
-              {/* THE FIX: Passed userRole and currentUserId into the child component */}
               {visibleLocations.map((loc) => (
                 <LocationMarker 
                   key={`isolated-marker-${loc.type}-${loc.id}`}
