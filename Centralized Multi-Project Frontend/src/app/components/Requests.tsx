@@ -201,7 +201,8 @@ export function Requests() {
     setAdvisorOptions([]);
 
     try {
-      const url = `http://${window.location.hostname}:8000/advisory/auto-restock/${req.site_id}?item_name=${encodeURIComponent(req.item_name)}&quantity_needed=${req.quantity_needed}`;
+      // Using the live Render URL instead of localhost/hostname
+      const url = `https://mattrack-personal.onrender.com/advisory/auto-restock/${req.site_id}?item_name=${encodeURIComponent(req.item_name)}&quantity_needed=${req.quantity_needed}`;
       const res = await fetch(url);
       if (res.ok) setAdvisorOptions(await res.json());
       else alert("Failed to fetch routing options.");
