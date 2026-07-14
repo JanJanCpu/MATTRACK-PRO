@@ -101,7 +101,30 @@ export function Inventory() {
   useEffect(() => { if (activeTab === "incoming") loadIncomingTransfers(); }, [activeTab, sitesList]);
 
   const handleAcceptTransfer = async (transferId: number) => { if (!window.confirm("SECURITY VERIFICATION: Confirm receipt of these materials?")) return; try { await transferAPI.receive(transferId); alert("✅ Transfer successfully received! Critical statuses automatically updated."); loadIncomingTransfers(); fetchData(); window.dispatchEvent(new Event("inventoryUpdated")); } catch (err) { alert("Failed to receive transfer."); } };
-  const handleCancelTransfer = async (transferId: number) => { if (!window.confirm("Are you sure you want to REJECT this incoming transfer? The materials will be routed back to the original sender.")) return; try { const token = localStorage.getItem("token"); const res = await fetch(`http://${window.location.hostname}:8000/transfers/${transferId}/cancel`, { method: "POST", headers: { Authorization: `Bearer ${token}` } }); if (res.ok) { alert("❌ Transfer rejected. Items have been successfully refunded to the source inventory."); loadIncomingTransfers(); fetchData(); window.dispatchEvent(new Event("inventoryUpdated")); } else { alert("Failed to reject transfer."); } } catch (err) { alert("Network error."); } };
+  const handleCancelTransfer = async (transferId: number) => { 
+    if (!window.confirm("Are you sure you want to REJECT this incoming transfer? The materials will be routed back to the original sender.")) return; 
+    
+    try { 
+      const token = localStorage.getItem("token"); 
+      
+      // Fixed: Pointing directly to your live Render backend instead of localhost
+      const res = await fetch(`https://mattrack-personal.onrender.com/transfers/${transferId}/cancel`, { 
+        method: "POST", 
+        headers: { Authorization: `Bearer ${token}` } 
+      }); 
+      
+      if (res.ok) { 
+        alert("❌ Transfer rejected. Items have been successfully refunded to the source inventory."); 
+        loadIncomingTransfers(); 
+        fetchData(); 
+        window.dispatchEvent(new Event("inventoryUpdated")); 
+      } else { 
+        alert("Failed to reject transfer."); 
+      } 
+    } catch (err) { 
+      alert("Network error."); 
+    } 
+  };
 
   const submitReceivePO = async (e: React.FormEvent) => { e.preventDefault(); if (!receivingPO) return; if (poRating === 0) return alert("Please provide a delivery rating before confirming."); try { await purchaseOrdersAPI.receive(receivingPO.id, poRating); alert("✅ External PO Shipment Received! Supplier rating recorded."); setReceivingPO(null); setPoRating(0); fetchData(); window.dispatchEvent(new Event("inventoryUpdated")); } catch (err: any) { alert(err.message || "Network error. Could not mark shipment as received."); } };
   const handleCancelPO = async (poId: number) => { if (!window.confirm("Are you sure you want to cancel this pending purchase order?")) return; try { await purchaseOrdersAPI.cancel(poId); alert("❌ Purchase Order successfully cancelled."); fetchData(); } catch (err: any) { alert(err.message || "Network error. Could not cancel PO."); } };
