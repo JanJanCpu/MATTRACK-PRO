@@ -29,8 +29,8 @@ app = FastAPI(title="MatTrack PRO API", version="2.6.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], 
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -234,7 +234,7 @@ def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends(), db
 def read_users_me(current_user: models.User = Depends(get_current_user)): return current_user
 
 @app.get("/users/managers", response_model=List[schemas.UserResponse], tags=["Users"])
-def get_managers(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)): return db.query(models.User).filter(models.User.role == "staff").all()
+def get_managers(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)): return db.query(models.User).filter(models.User.role == "staff").all()
 
 # --- SECURITY SETTINGS ---
 @app.patch("/users/password", tags=["Security"])
@@ -272,7 +272,7 @@ def get_security_logs(current_user: models.User = Depends(get_current_user), db:
 
 # --- SITES & SMART DELETION GUARDRAIL ---
 @app.get("/sites/", response_model=List[schemas.SiteResponse], tags=["Sites"])
-def list_sites(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+def list_sites(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     return db.query(models.ProjectSite).filter(models.ProjectSite.is_active == True).order_by(models.ProjectSite.id.asc()).all()
 
 @app.post("/sites/", response_model=schemas.SiteResponse, tags=["Sites"])
@@ -424,14 +424,14 @@ def restore_site(site_id: int, current_user: models.User = Depends(get_current_u
     return site
 
 @app.get("/sites/{site_id}/audit-logs", response_model=List[schemas.ActivityLogResponse], tags=["Sites"])
-def get_site_audit_logs(site_id: int, db: Session = Depends(get_db)):
+def get_site_audit_logs(site_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     logs = db.query(models.ActivityLog).filter(models.ActivityLog.site_id == site_id).order_by(models.ActivityLog.id.desc()).limit(50).all()
     return [{"id": l.id, "user_id": l.user_id, "site_id": l.site_id, "action": l.action, "timestamp": get_local_time_string(l.timestamp), "is_security_event": l.is_security_event} for l in logs]
 
 
 # --- INVENTORY & AUDIT LOGGING ---
 @app.get("/inventory/", response_model=List[schemas.InventoryResponse], tags=["Inventory"])
-def list_inventory(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)): return db.query(models.Inventory).all()
+def list_inventory(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)): return db.query(models.Inventory).all()
 
 @app.post("/inventory/log", tags=["Inventory"])
 def log_stock_transaction(transaction: schemas.InventoryBase = Body(...), current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -542,7 +542,7 @@ def bulk_upload_inventory(items: List[schemas.InventoryBase] = Body(...), curren
     return {"status": "Success", "message": action_msg}
 
 @app.get("/inventory/audit-logs/", tags=["Inventory"])
-def get_recent_audit_logs(db: Session = Depends(get_db)):
+def get_recent_audit_logs(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     logs = db.query(models.ActivityLog).order_by(models.ActivityLog.id.desc()).limit(20).all()
     return [{"id": l.id, "user_id": l.user_id, "site_id": l.site_id, "action": l.action, "timestamp": get_local_time_string(l.timestamp)} for l in logs]
 
@@ -727,7 +727,7 @@ def initiate_transfer(req: schemas.TransferCreate = Body(...), current_user: mod
     return {"status": "Success", "message": "Transfer initiated successfully."}
 
 @app.get("/transfers/incoming/{site_id}", tags=["Transfers"])
-def get_incoming_transfers(site_id: int, db: Session = Depends(get_db)):
+def get_incoming_transfers(site_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     return db.query(models.MaterialTransfer).filter(models.MaterialTransfer.destination_site_id == site_id, models.MaterialTransfer.status == models.TransferStatus.IN_TRANSIT.value).all()
 
 @app.post("/transfers/{transfer_id}/receive", tags=["Transfers"])
@@ -762,6 +762,7 @@ def receive_transfer(transfer_id: int, current_user: models.User = Depends(get_c
 
 @app.post("/transfers/{transfer_id}/cancel", tags=["Transfers"])
 def cancel_transfer(transfer_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if current_user.role not in ["admin", "owner"]: raise HTTPException(403, detail="ERP SECURITY: Only Admins can cancel logistics transfers.")
     transfer = db.query(models.MaterialTransfer).filter(models.MaterialTransfer.id == transfer_id).first()
     if not transfer:
         raise HTTPException(status_code=404, detail="Transfer not found.")
@@ -802,7 +803,7 @@ def cancel_transfer(transfer_id: int, current_user: models.User = Depends(get_cu
 
 # --- PROCUREMENT & GLOBAL DISCOVERY ---
 @app.get("/procurement/discover", response_model=List[GlobalSourcingResult], tags=["Procurement"])
-def discover_materials(site_id: int, query: str = Query(..., min_length=2), db: Session = Depends(get_db)):
+def discover_materials(site_id: int, query: str = Query(..., min_length=2), current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     target_site = db.query(models.ProjectSite).filter(models.ProjectSite.id == site_id).first()
     if not target_site: raise HTTPException(404, "Site not found")
 
@@ -820,17 +821,18 @@ def discover_materials(site_id: int, query: str = Query(..., min_length=2), db: 
     return sorted(results, key=lambda x: (x["unit_price"], x["distance_km"]))
 
 @app.get("/suppliers/recent", tags=["Procurement"])
-def get_recent_suppliers(db: Session = Depends(get_db)):
+def get_recent_suppliers(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     recent_pos = db.query(models.PurchaseOrder.supplier_id, func.count(models.PurchaseOrder.id).label('total')).group_by(models.PurchaseOrder.supplier_id).order_by(func.count(models.PurchaseOrder.id).desc()).limit(3).all()
     sup_ids = [po.supplier_id for po in recent_pos]
     if not sup_ids: return db.query(models.Supplier).filter(models.Supplier.is_sister_company == True).all()
     return db.query(models.Supplier).filter(models.Supplier.id.in_(sup_ids)).all()
 
 @app.get("/suppliers/", response_model=List[SupplierOut], tags=["Logistics"])
-def list_suppliers(db: Session = Depends(get_db)): return db.query(models.Supplier).all()
+def list_suppliers(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)): return db.query(models.Supplier).all()
 
 @app.post("/suppliers/", response_model=SupplierOut, tags=["Logistics"])
-def create_supplier(s: schemas.SupplierCreate = Body(...), db: Session = Depends(get_db)):
+def create_supplier(s: schemas.SupplierCreate = Body(...), current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if current_user.role not in ["admin", "owner"]: raise HTTPException(status_code=403, detail="Unauthorized.")
     new_s = models.Supplier(
         name=s.name, contact=s.contact, latitude=s.lat, longitude=s.lon, 
         quality_rating=s.rating, is_sister_company=False, address=s.address
@@ -852,7 +854,8 @@ def create_supplier(s: schemas.SupplierCreate = Body(...), db: Session = Depends
     return new_s
 
 @app.patch("/suppliers/{supplier_id}/rating", tags=["Logistics"])
-def update_supplier_rating(supplier_id: int, req: schemas.RatingUpdate = Body(...), db: Session = Depends(get_db)):
+def update_supplier_rating(supplier_id: int, req: schemas.RatingUpdate = Body(...), current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if current_user.role not in ["admin", "owner"]: raise HTTPException(status_code=403, detail="Unauthorized.")
     supplier = db.query(models.Supplier).filter(models.Supplier.id == supplier_id).first()
     if not supplier: raise HTTPException(status_code=404, detail="Supplier not found")
     supplier.quality_rating = req.rating
@@ -860,7 +863,8 @@ def update_supplier_rating(supplier_id: int, req: schemas.RatingUpdate = Body(..
     return {"status": "success", "message": "Rating updated", "new_rating": supplier.quality_rating}
 
 @app.delete("/suppliers/{supplier_id}", tags=["Logistics"])
-def delete_supplier(supplier_id: int, db: Session = Depends(get_db)):
+def delete_supplier(supplier_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if current_user.role not in ["admin", "owner"]: raise HTTPException(status_code=403, detail="Unauthorized.")
     db_supplier = db.query(models.Supplier).filter(models.Supplier.id == supplier_id).first()
     if not db_supplier: raise HTTPException(status_code=404, detail="Supplier not found")
     db.delete(db_supplier)
@@ -868,7 +872,7 @@ def delete_supplier(supplier_id: int, db: Session = Depends(get_db)):
     return {"status": "success", "message": f"Supplier {supplier_id} deleted"}
 
 @app.get("/suppliers/{supplier_id}/catalog", response_model=List[CatalogItemOut], tags=["Suppliers"])
-def get_supplier_catalog_by_id(supplier_id: int, db: Session = Depends(get_db)):
+def get_supplier_catalog_by_id(supplier_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     supplier = db.query(models.Supplier).filter(models.Supplier.id == supplier_id).first()
     if not supplier: raise HTTPException(status_code=404, detail="Supplier not found")
     return db.query(models.SupplierMaterial).filter(models.SupplierMaterial.supplier_id == supplier_id).all()
@@ -1079,7 +1083,7 @@ def update_order_status(order_id: int, status: str = Body(..., embed=True), curr
 
 # --- ADVISORY ENGINE ---
 @app.get("/advisory/auto-restock/{site_id}", tags=["Advisory"])
-def get_smart_restock_options(site_id: int, item_name: str, quantity_needed: float, db: Session = Depends(get_db)):
+def get_smart_restock_options(site_id: int, item_name: str, quantity_needed: float, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     target_site = db.query(models.ProjectSite).filter(models.ProjectSite.id == site_id).first()
     norm_name = normalize_item_name(item_name)
     options = []
