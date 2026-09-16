@@ -209,7 +209,8 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
 
 # --- AUTH & USER ROUTES ---
 @app.post("/register", response_model=schemas.UserResponse, tags=["Auth"])
-def register_user(user: schemas.UserCreate = Body(...), db: Session = Depends(get_db)):
+def register_user(user: schemas.UserCreate = Body(...), current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if current_user.role not in ["admin", "owner"]: raise HTTPException(status_code=403, detail="Only Admins can create accounts.")
     db_user = db.query(models.User).filter(models.User.username == user.username).first()
     if db_user: raise HTTPException(status_code=400, detail="Username already registered")
     hashed = hash_password(user.password)

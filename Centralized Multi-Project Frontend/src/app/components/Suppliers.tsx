@@ -157,8 +157,9 @@ export function Suppliers() {
     if (!managingCredsFor) return;
     setIsGenerating(true);
     try {
+      const token = localStorage.getItem("token");
       const response = await fetch(`${BASE_URL}/register`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify({ username: credForm.username.trim(), email: credForm.email.trim(), password: credForm.password, role: "seller", company_name: managingCredsFor.name, supplier_id: managingCredsFor.id })
       });
       if (response.ok) {
