@@ -57,4 +57,16 @@ export default defineConfig({
   optimizeDeps: {
     include: ['leaflet'],
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'vendor-react': ['react', 'react-dom', 'react-router', 'react-router-dom'],
+          'vendor-mui': ['@mui/material', '@mui/icons-material', '@emotion/react', '@emotion/styled'],
+          'vendor-charts': ['recharts'],
+          'vendor-map': ['leaflet', 'react-leaflet'],
+        },
+      },
+    },
+  },
 })

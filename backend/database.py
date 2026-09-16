@@ -9,18 +9,17 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # 2. Tell Python exactly where the .env file should be
 ENV_PATH = os.path.join(BASE_DIR, ".env")
-print(f"DEBUG: Looking for .env file at: {ENV_PATH}")
 
 # 3. Force load from that exact path
 load_dotenv(ENV_PATH)
 
-# 4. Fetch the variable, with the fallback included for ultimate safety
-SQLALCHEMY_DATABASE_URL = os.getenv(
-    "DATABASE_URL", 
-    "postgresql://postgres:S0ftandW3t@localhost:5432/mattrack_db"
-)
-
-print(f"DEBUG: Database URL loaded as: {SQLALCHEMY_DATABASE_URL}")
+# 4. Fetch the variable — no hardcoded credential fallback; fail fast instead
+SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL")
+if not SQLALCHEMY_DATABASE_URL:
+    raise RuntimeError(
+        "DATABASE_URL environment variable is not set. Define it in backend/.env "
+        "(e.g. postgresql://user:password@localhost:5432/mattrack_db)."
+    )
 
 engine = create_engine(SQLALCHEMY_DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

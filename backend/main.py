@@ -17,6 +17,7 @@ from passlib.context import CryptContext
 
 # --- AI INTEGRATION IMPORTS ---
 import os
+import secrets
 from dotenv import load_dotenv
 import google.generativeai as genai
 
@@ -37,7 +38,12 @@ app.add_middleware(
 
 models.Base.metadata.create_all(bind=engine)
 
-SECRET_KEY = os.environ.get("SECRET_KEY", "SUPER_SECRET_SECURITY_TOKEN_REPLACE_THIS_FOR_PRODUCTION")
+SECRET_KEY = os.environ.get("SECRET_KEY")
+if not SECRET_KEY:
+    SECRET_KEY = secrets.token_hex(32)
+    print("WARNING: SECRET_KEY environment variable is not set. Generated a random key for this run — "
+          "all existing sessions/tokens will be invalidated on every restart. Set SECRET_KEY in your "
+          "environment for a stable, production-safe deployment.")
 ALGORITHM = "HS256"
 PH_TZ = timezone('Asia/Manila')
 
